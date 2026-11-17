@@ -93,3 +93,25 @@ def test_to_networkx(lattice):
     assert g.number_of_edges() == len(cg.edges)
     region = next(n for n, d in g.nodes(data=True) if d["kind"] == "region")
     assert g.nodes[region]["n_members"] >= 3
+
+
+def test_coarse_ids_are_integers(lattice):
+    cg = coarsen_homogeneous(lattice, ["lc"])
+    assert cg.nodes.index.dtype == np.int64
+    assert cg.membership.dtype == np.int64
+    for level in ("u", "v"):
+        assert cg.edges.index.get_level_values(level).dtype == np.int64
+    regions = cg.nodes.index[cg.nodes["kind"] == "region"]
+    # region ids continue after the largest original node id, in first-member order
+    assert list(regions) == list(range(cg.membership.index.max() + 1, regions.max() + 1))
+    assert not set(regions) & set(cg.membership.index)
+    # mixed node/region ids sort and group without TypeError
+    assert cg.membership.groupby(cg.membership).size().sum() == len(cg.membership)
+
+
+def test_rejects_non_integer_node_ids(lattice):
+    relabelled = lattice.rename(index=lambda n: f"n{n}", level="u").rename(
+        index=lambda n: f"n{n}", level="v"
+    )
+    with pytest.raises(TypeError, match="integer node ids"):
+        coarsen_homogeneous(relabelled, ["lc"])

@@ -132,17 +132,14 @@ def _coarsen_and_write(config: PipelineConfig, result: gpd.GeoDataFrame) -> Coar
     out = config.output
     if out.coarse_nodes is not None:
         nodes = coarse.nodes.assign(
-            members=coarse.membership.groupby(coarse.membership, sort=False)
+            members=coarse.membership.index.to_series()
+            .groupby(coarse.membership.to_numpy())
             .agg(list)
             .reindex(coarse.nodes.index)
         )
-        nodes.index = nodes.index.astype(str)
         write_vector(nodes, out.coarse_nodes)
     if out.coarse_edges is not None:
-        edges = coarse.edges.reset_index()
-        for col in ("u", "v"):
-            edges[col] = edges[col].astype(str)
-        write_vector(edges, out.coarse_edges)
+        write_vector(coarse.edges.reset_index(), out.coarse_edges)
     if out.coarse_graphml is not None:
         write_graphml(coarse.to_networkx(), out.coarse_graphml)
     return coarse
