@@ -12,10 +12,10 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from feral_mapper_data._util import require_columns, to_edge_frame
 from feral_mapper_data.conflate import conflate_lines
 from feral_mapper_data.geo.crs import align_crs
 from feral_mapper_data.geo.geometry import clean_geometries
+from feral_mapper_data.network.schema import require_columns, to_edge_frame
 
 
 def traffic_attributes(

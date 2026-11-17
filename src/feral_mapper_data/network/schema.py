@@ -1,24 +1,24 @@
-"""Shared helpers for edge attribute transfer."""
+"""Canonical edge-table schema: index names and frame validation."""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
 import geopandas as gpd
 import pandas as pd
+
+EDGE_INDEX: tuple[str, str, str] = ("u", "v", "key")
+
+
+def check_index(frame: pd.DataFrame) -> None:
+    if list(frame.index.names) != list(EDGE_INDEX):
+        raise ValueError(f"Frame must be indexed by {EDGE_INDEX}, got {frame.index.names}.")
 
 
 def require_columns(df: pd.DataFrame, columns: Iterable[str], name: str) -> None:
     missing = [c for c in columns if c not in df.columns]
     if missing:
         raise KeyError(f"{name} layer is missing columns: {missing}")
-
-
-def slug(value: object) -> str:
-    """Column-safe lowercase name for a category value."""
-    text = re.sub(r"[^0-9a-zA-Z]+", "_", str(value)).strip("_").lower()
-    return text or "blank"
 
 
 def to_edge_frame(edges: gpd.GeoDataFrame, by_pos: dict[str, pd.Series]) -> pd.DataFrame:

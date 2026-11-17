@@ -4,7 +4,7 @@ import pytest
 from shapely.geometry import box
 
 from feral_mapper_data import polygon_attributes
-from feral_mapper_data._util import slug
+from feral_mapper_data.polygons import _slug as slug
 from tests.conftest import CRS, X0, Y0, by_name
 
 

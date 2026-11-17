@@ -27,16 +27,10 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from feral_mapper_data._util import require_columns
 from feral_mapper_data.geo.aggregate import is_numeric, weighted_majority, weighted_mean
 from feral_mapper_data.geo.geometry import components
-from feral_mapper_data.graph import (
-    EDGE_INDEX,
-    _check_index,
-    _records,
-    add_edge_records,
-    node_coordinates,
-)
+from feral_mapper_data.network.graph import add_edge_records, node_coordinates, records
+from feral_mapper_data.network.schema import EDGE_INDEX, check_index, require_columns
 
 REGION_PREFIX = "region_"
 
@@ -60,7 +54,7 @@ class CoarseGraph:
 
     def to_networkx(self) -> nx.MultiDiGraph:
         graph = nx.MultiDiGraph(crs=self.edges.crs)
-        attrs = _records(self.nodes.drop(columns=self.nodes.geometry.name))
+        attrs = records(self.nodes.drop(columns=self.nodes.geometry.name))
         for record, geom in zip(attrs, self.nodes.geometry.to_numpy(), strict=True):
             record["geometry"] = geom
         graph.add_nodes_from(zip(self.nodes.index, attrs, strict=True))
@@ -108,7 +102,7 @@ def coarsen_homogeneous(
     ``tile_m`` caps region extent: regions never cross a square grid of this size (CRS units),
     bounding the spatial resolution lost. ``hull_ratio`` is shapely's concave-hull ratio.
     """
-    _check_index(edges)
+    check_index(edges)
     if min_region_nodes < 2:
         raise ValueError("min_region_nodes must be >= 2.")
     if tile_m is not None and tile_m <= 0:

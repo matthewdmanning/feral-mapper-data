@@ -26,7 +26,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from feral_mapper_data.graph import _check_index
+from feral_mapper_data.network.schema import check_index
 
 if TYPE_CHECKING:
     from rdflib import Graph
@@ -110,7 +110,7 @@ def to_geosparql(
                 graph.add((iri, pred, lit))
 
     if edges is not None:
-        _check_index(edges)
+        check_index(edges)
         iris = [URIRef(f"{base_iri}edge/{u}_{v}_{k}") for u, v, k in edges.index]
         add_features(edges, iris, [fm.Edge] * len(iris), set())
         for iri, (u, v, _) in zip(iris, edges.index, strict=True):

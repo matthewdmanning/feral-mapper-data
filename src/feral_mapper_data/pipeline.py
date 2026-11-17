@@ -12,13 +12,9 @@ import pandas as pd
 from feral_mapper_data.coarsen import CoarseGraph, coarsen_homogeneous
 from feral_mapper_data.config import PipelineConfig
 from feral_mapper_data.geo.crs import ensure_projected
-from feral_mapper_data.graph import (
-    attach_to_graph,
-    edges_from_graph,
-    edges_from_lines,
-    graph_from_edges,
-)
 from feral_mapper_data.io import read_graphml, read_vector, write_graphml, write_vector
+from feral_mapper_data.network.edges import edges_from_lines
+from feral_mapper_data.network.graph import attach_to_graph, edges_from_graph, graph_from_edges
 from feral_mapper_data.polygons import polygon_attributes
 from feral_mapper_data.roadway import roadway_attributes
 from feral_mapper_data.traffic import traffic_attributes
