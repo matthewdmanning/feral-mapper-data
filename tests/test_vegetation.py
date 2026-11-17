@@ -4,29 +4,7 @@ import rasterio
 from rasterio.transform import from_origin
 
 from feral_mapper_data import raster_corridor_stats, write_ndvi
-from tests.conftest import CRS, X0, Y0, by_name
-
-NODATA = -9999
-
-
-def make_raster(path, data, crs=CRS, nodata=NODATA, res=10.0):
-    """Raster covering x in [-50, 250), y in (-150, 50] relative to the fixture origin."""
-    transform = from_origin(X0 - 50, Y0 + 50, res, res)
-    count = 1 if data.ndim == 2 else data.shape[0]
-    with rasterio.open(
-        path,
-        "w",
-        driver="GTiff",
-        width=data.shape[-1],
-        height=data.shape[-2],
-        count=count,
-        dtype=data.dtype,
-        crs=crs,
-        transform=transform,
-        nodata=nodata,
-    ) as dst:
-        dst.write(data if data.ndim == 3 else data[None])
-    return path
+from tests.conftest import CRS, NODATA, X0, Y0, by_name, make_raster
 
 
 @pytest.fixture

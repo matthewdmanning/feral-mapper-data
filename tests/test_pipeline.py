@@ -1,161 +1,83 @@
+"""run() writes every configured output and is deterministic."""
+
+from __future__ import annotations
+
 import textwrap
 
 import geopandas as gpd
 import networkx as nx
-import numpy as np
 import pytest
-from shapely.geometry import Point, box
+from geopandas.testing import assert_geodataframe_equal
 
-from feral_mapper_data.cli import main
-from feral_mapper_data.config import ConfigError, PipelineConfig
-from tests.conftest import CRS, X0, Y0, line
-from tests.test_vegetation import make_raster
+from feral_mapper_data import graph_from_edges
+from feral_mapper_data.config import PipelineConfig
+from feral_mapper_data.pipeline import run
+from tests.conftest import PIPELINE_TOML
 
-CONFIG = """
-[network]
-path = "network.gpkg"
+# ---------------------------------------------------------------------------
+# Helpers / local fixtures
+# ---------------------------------------------------------------------------
 
-[roadway]
-path = "roads.parquet"
-columns = ["lanes"]
+COARSEN_TOML = textwrap.dedent(
+    """
+    coarse_nodes = "out/coarse_nodes.parquet"
+    coarse_edges = "out/coarse_edges.parquet"
+    coarse_graphml = "out/coarse.graphml"
 
-[traffic]
-segments = "aadt.gpkg"
-stations = "stations.gpkg"
-
-[[vegetation]]
-path = "ndvi.tif"
-buffer_m = 15
-stats = ["mean"]
-
-[[polygons]]
-path = "landcover.gpkg"
-category_column = "class"
-prefix = "lc_"
-
-[output]
-edges = "out/edges.parquet"
-graphml = "out/graph.graphml"
-"""
-
-
-@pytest.fixture
-def workspace(tmp_path, network_lines):
-    network_lines.to_crs("EPSG:4326").to_file(tmp_path / "network.gpkg")  # geographic input
-    gpd.GeoDataFrame({"lanes": [2]}, geometry=[line((0, 2), (100, 2))], crs=CRS).to_parquet(
-        tmp_path / "roads.parquet"
-    )
-    gpd.GeoDataFrame({"aadt": [5000]}, geometry=[line((0, 1), (100, 1))], crs=CRS).to_file(
-        tmp_path / "aadt.gpkg"
-    )
-    gpd.GeoDataFrame({"aadt": [700]}, geometry=[Point(X0 + 150, Y0 + 3)], crs=CRS).to_file(
-        tmp_path / "stations.gpkg"
-    )
-    make_raster(tmp_path / "ndvi.tif", np.full((20, 30), 0.4, dtype="float32"))
-    gpd.GeoDataFrame(
-        {"class": ["park"]}, geometry=[box(X0 - 10, Y0 - 50, X0 + 250, Y0 + 50)], crs=CRS
-    ).to_file(tmp_path / "landcover.gpkg")
-    (tmp_path / "config.toml").write_text(CONFIG)
-    return tmp_path
-
-
-def test_cli_end_to_end(workspace):
-    assert main([str(workspace / "config.toml")]) == 0
-    edges = gpd.read_parquet(workspace / "out" / "edges.parquet")
-    assert edges.crs.is_projected
-    assert len(edges) == 3
-    main_w = edges[edges["name"] == "main_w"].iloc[0]
-    main_e = edges[edges["name"] == "main_e"].iloc[0]
-    assert main_w["road_lanes"] == pytest.approx(2)
-    assert main_w["aadt"] == pytest.approx(5000)
-    assert main_e["aadt_source"] == "station"
-    assert main_w["ndvi_mean"] == pytest.approx(0.4, abs=1e-6)
-    assert main_w["lc_park_frac"] == pytest.approx(1.0, abs=1e-6)
-
-    graph = nx.read_graphml(workspace / "out" / "graph.graphml")
-    assert graph.number_of_edges() == 3
-    assert any("ndvi_mean" in d for *_, d in graph.edges(data=True))
-
-
-def test_prefix_clash_is_an_error(workspace):
-    cfg = CONFIG.replace('prefix = "lc_"', 'prefix = "ndvi_"').replace(
-        'category_column = "class"', 'value_columns = ["mean"]'
-    )
-    gpd.GeoDataFrame({"mean": [1.0]}, geometry=[box(X0, Y0 - 5, X0 + 5, Y0 + 5)], crs=CRS).to_file(
-        workspace / "landcover.gpkg"
-    )
-    (workspace / "config.toml").write_text(cfg)
-    with pytest.raises(ValueError, match="clash"):
-        main([str(workspace / "config.toml")])
-
-
-@pytest.mark.parametrize(
-    ("toml", "match"),
-    [
-        ('[network]\npath="a"\n', "output"),
-        ('[network]\npath="a"\nbogus=1\n[output]\nedges="e"\n', "Unknown keys"),
-        ('[network]\npath="a"\n[output]\nedges="e"\n[traffic]\nbuffer_m=5\n', "segments"),
-        ('[network]\npath="a"\n[output]\nedges="e"\n[polygons]\npath="p"\nprefix="x"\n', "array"),
-    ],
+    [coarsen]
+    columns = ["lc_majority"]
+    min_region_nodes = 2
+    """
 )
-def test_config_validation(tmp_path, toml, match):
-    path = tmp_path / "c.toml"
-    path.write_text(textwrap.dedent(toml))
-    with pytest.raises(ConfigError, match=match):
-        PipelineConfig.from_toml(path)
 
 
-def test_config_paths_resolve_relative_to_file(tmp_path):
-    path = tmp_path / "sub" / "c.toml"
-    path.parent.mkdir()
-    path.write_text('[network]\npath="net.gpkg"\n[output]\nedges="o.parquet"\n')
-    cfg = PipelineConfig.from_toml(path)
-    assert cfg.network.path == tmp_path / "sub" / "net.gpkg"
+def _run_with(workspace, toml: str) -> gpd.GeoDataFrame:
+    """Write ``toml`` as the workspace config and run the pipeline on it."""
+    (workspace / "config.toml").write_text(toml)
+    return run(PipelineConfig.from_toml(workspace / "config.toml"))
 
 
-def test_cli_config_error_exit_code(tmp_path, capsys):
-    path = tmp_path / "c.toml"
-    path.write_text("[network]\n")
-    assert main([str(path)]) == 2
-    assert "config error" in capsys.readouterr().err
+# ---------------------------------------------------------------------------
+# Determinism
+# ---------------------------------------------------------------------------
 
 
-def test_pipeline_coarsen_and_geosparql(workspace):
-    pytest.importorskip("rdflib")
-    cfg = CONFIG + textwrap.dedent(
-        """
-        coarse_nodes = "out/coarse_nodes.parquet"
-        coarse_edges = "out/coarse_edges.parquet"
-        coarse_graphml = "out/coarse.graphml"
-        geosparql = "out/network.ttl"
+def test_run_twice_gives_identical_edges(workspace):
+    first = _run_with(workspace, PIPELINE_TOML)
+    second = _run_with(workspace, PIPELINE_TOML)
+    assert_geodataframe_equal(first, second)
 
-        [coarsen]
-        columns = ["lc_majority"]
-        min_region_nodes = 2
-        """
-    )
-    (workspace / "config.toml").write_text(cfg)
-    assert main([str(workspace / "config.toml")]) == 0
+
+# ---------------------------------------------------------------------------
+# Coarsened outputs
+# ---------------------------------------------------------------------------
+
+
+def test_coarsen_writes_nodes_edges_and_graphml(workspace):
+    _run_with(workspace, PIPELINE_TOML + COARSEN_TOML)
     nodes = gpd.read_parquet(workspace / "out/coarse_nodes.parquet")
     assert {"kind", "n_members", "members"} <= set(nodes.columns)
     assert list(nodes["kind"]) == ["region"]  # all edges are park: one region absorbs them
     assert len(gpd.read_parquet(workspace / "out/coarse_edges.parquet")) == 0
     assert nx.read_graphml(workspace / "out/coarse.graphml").number_of_nodes() == len(nodes)
+
+
+def test_coarsen_and_geosparql(workspace):
+    pytest.importorskip("rdflib")
+    toml = PIPELINE_TOML + 'geosparql = "out/network.ttl"\n' + COARSEN_TOML
+    _run_with(workspace, toml)
     assert (workspace / "out/network.ttl").stat().st_size > 0
 
 
-@pytest.mark.parametrize(
-    ("extra", "match"),
-    [
-        ('[coarsen]\ncolumns=["a"]\n', "coarse_nodes"),
-        ('[output]\nedges="e"\ncoarse_nodes="n"\n', "coarsen"),
-        ('[output]\nedges="e"\ngeosparql_crs="utm"\n', "geosparql_crs"),
-    ],
-)
-def test_coarsen_config_validation(tmp_path, extra, match):
-    base = '[network]\npath="a"\n'
-    toml = base + (extra if extra.startswith("[output]") else '[output]\nedges="e"\n' + extra)
-    path = tmp_path / "c.toml"
-    path.write_text(toml)
-    with pytest.raises(ConfigError, match=match):
-        PipelineConfig.from_toml(path)
+# ---------------------------------------------------------------------------
+# GraphML input
+# ---------------------------------------------------------------------------
+
+
+def test_graphml_input_keeps_attributes_on_output_graph(workspace, edges):
+    ox = pytest.importorskip("osmnx")
+    ox.save_graphml(graph_from_edges(edges), workspace / "network.graphml")
+    _run_with(workspace, PIPELINE_TOML.replace("network.gpkg", "network.graphml"))
+    graph = nx.read_graphml(workspace / "out/graph.graphml")
+    assert graph.number_of_edges() == len(edges)
+    assert any("ndvi_mean" in d for *_, d in graph.edges(data=True))
