@@ -6,8 +6,8 @@ import argparse
 import logging
 import sys
 
-from feral_mapper_data.config import ConfigError, PipelineConfig
-from feral_mapper_data.pipeline import run
+from feral_mapper_data.app.config import ConfigError, PipelineConfig
+from feral_mapper_data.app.pipeline import run
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -9,12 +9,12 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
+from feral_mapper_data.app.config import PipelineConfig
 from feral_mapper_data.attributes.polygons import polygon_attributes
 from feral_mapper_data.attributes.roadway import roadway_attributes
 from feral_mapper_data.attributes.traffic import traffic_attributes
 from feral_mapper_data.attributes.vegetation import raster_corridor_stats
 from feral_mapper_data.coarsen import CoarseGraph, coarsen_homogeneous
-from feral_mapper_data.config import PipelineConfig
 from feral_mapper_data.geo.crs import ensure_projected
 from feral_mapper_data.io.files import read_graphml, read_vector, write_graphml, write_vector
 from feral_mapper_data.network.edges import edges_from_lines
