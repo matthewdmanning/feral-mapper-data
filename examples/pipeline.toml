@@ -1,0 +1,55 @@
+# Example pipeline config. Paths resolve relative to this file.
+# Run: uv run feral-edges examples/pipeline.toml
+
+[network]
+path = "../data/raw/roads.gpkg"      # noded centerlines, or an osmnx .graphml (needs [osm] extra)
+# crs = "EPSG:32617"                 # default: keep projected CRS, else estimate UTM
+node_tolerance = 0.5                 # metres; endpoints this close share a node
+
+[roadway]                             # DOT roadway inventory lines
+path = "../data/raw/roadway_inventory.gpkg"
+columns = ["lanes", "speed_limit", "func_class", "surface"]
+buffer_m = 10
+min_coverage = 0.5
+aggregations = { speed_limit = "max" }   # default: weighted_mean numeric, majority otherwise
+
+[traffic]                             # AADT; segments win, stations fill gaps
+segments = "../data/raw/aadt_segments.gpkg"
+segment_column = "aadt"
+stations = "../data/raw/count_stations.gpkg"
+station_column = "aadt"
+max_station_distance_m = 30
+
+[[vegetation]]                        # satellite NDVI, e.g. Sentinel-2 or MODIS
+path = "../data/raw/ndvi.tif"
+prefix = "ndvi_"
+buffer_m = 30
+stats = ["mean", "std", "max"]
+# scale = 0.0001                     # MODIS MOD13 NDVI
+valid_range = [-1.0, 1.0]
+
+[[polygons]]                          # categorical land cover, corridor area shares
+path = "../data/raw/landcover.gpkg"
+category_column = "class"
+buffer_m = 50
+prefix = "lc_"
+
+[[polygons]]                          # numeric census attributes, length-weighted
+path = "../data/raw/census_blocks.gpkg"
+value_columns = ["housing_density", "population_density"]
+prefix = "census_"
+
+[coarsen]                             # collapse large homogeneous areas into region nodes
+columns = ["lc_majority", "ndvi_mean", "road_func_class"]
+tolerances = { ndvi_mean = 0.1 }      # numeric bin width; omitted columns must match exactly
+min_region_nodes = 5                  # smaller homogeneous patches keep full detail
+tile_m = 1000                         # regions never span >1 km grid cell (bounds detail loss)
+
+[output]
+edges = "../data/processed/edges.parquet"   # GeoParquet 1.1 (bbox covering column)
+graphml = "../data/processed/graph.graphml"
+coarse_nodes = "../data/processed/coarse_nodes.parquet"
+coarse_edges = "../data/processed/coarse_edges.parquet"
+coarse_graphml = "../data/processed/coarse.graphml"
+geosparql = "../data/processed/network.ttl"   # needs [rdf] extra; .ttl/.nt/.jsonld/.rdf
+# geosparql_crs = "native"           # default crs84 (lon/lat, portable across triplestores)
