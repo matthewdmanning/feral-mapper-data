@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from pathlib import Path
 
 import geopandas as gpd
@@ -46,7 +45,7 @@ def build_edge_attributes(config: PipelineConfig, edges: gpd.GeoDataFrame) -> pd
                 rc.columns,
                 buffer_m=rc.buffer_m,
                 min_coverage=rc.min_coverage,
-                aggregations=rc.aggregations,  # type: ignore[arg-type]
+                aggregations=rc.aggregations,
                 prefix=rc.prefix,
             )
         )
@@ -77,7 +76,7 @@ def build_edge_attributes(config: PipelineConfig, edges: gpd.GeoDataFrame) -> pd
                 prefix=vc.prefix,
                 scale=vc.scale,
                 offset=vc.offset,
-                valid_range=tuple(vc.valid_range) if vc.valid_range else None,  # type: ignore[arg-type]
+                valid_range=vc.valid_range,
                 all_touched=vc.all_touched,
             )
         )
@@ -116,9 +115,9 @@ def run_pipeline(config: PipelineConfig) -> gpd.GeoDataFrame:
 
         crs = config.output.geosparql_crs
         if coarse is not None:
-            rdf = to_geosparql(coarse.edges, coarse.nodes, coarse.membership, wkt_crs=crs)  # type: ignore[arg-type]
+            rdf = to_geosparql(coarse.edges, coarse.nodes, coarse.membership, wkt_crs=crs)
         else:
-            rdf = to_geosparql(result, wkt_crs=crs)  # type: ignore[arg-type]
+            rdf = to_geosparql(result, wkt_crs=crs)
         write_geosparql(rdf, config.output.geosparql)
         log.info("Wrote %s (%d triples)", config.output.geosparql, len(rdf))
     return result
@@ -127,7 +126,7 @@ def run_pipeline(config: PipelineConfig) -> gpd.GeoDataFrame:
 def _coarsen_and_write(config: PipelineConfig, result: gpd.GeoDataFrame) -> CoarseGraph | None:
     if (cc := config.coarsen) is None:
         return None
-    coarse = coarsen_homogeneous(result, **asdict(cc))  # config fields mirror the signature
+    coarse = coarsen_homogeneous(result, **cc.model_dump())  # config fields mirror the signature
     n_in = len(coarse.membership)
     log.info("Coarsened %d nodes -> %d (%d edges kept)", n_in, len(coarse.nodes), len(coarse.edges))
     out = config.output
