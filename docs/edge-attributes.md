@@ -9,6 +9,21 @@ Converts roadway, traffic (AADT), satellite vegetation, and polygon layers onto 
 - Sources are reprojected to the edge CRS; rasters are never resampled (corridors go to raster CRS).
 - Invalid geometries repaired (`make_valid`); null/empty dropped; multi-parts exploded.
 
+## Module layout
+
+Layers import only from layers above them.
+
+| Package | Role |
+|---|---|
+| `geo/` | CRS handling, geometry cleaning and corridors, per-edge aggregation |
+| `network/` | `(u, v, key)` schema, edges from lines, graph <-> edge table |
+| `attributes/` | Converters: roadway, traffic, vegetation, polygons (shared `_conflate.py`) |
+| `coarsen.py` | Homogeneous-region coarsening |
+| `io/` | Vector and GraphML files (`files.py`), GeoSPARQL (`geosparql.py`) |
+| `app/` | TOML config, `run_pipeline`, CLI |
+
+The public API stays importable from `feral_mapper_data` directly.
+
 ## Converters
 
 | Source | Function | Method | Output columns |
@@ -21,7 +36,7 @@ Converts roadway, traffic (AADT), satellite vegetation, and polygon layers onto 
 
 Bands → NDVI: `write_ndvi(src, out, red_band=, nir_band=)`.
 
-### Line conflation (`conflate.py`)
+### Line conflation (`attributes/_conflate.py`)
 
 1. Flat-capped corridor of `buffer_m` per edge.
 2. Clip source lines to corridor.
@@ -29,13 +44,13 @@ Bands → NDVI: `write_ndvi(src, out, red_band=, nir_band=)`.
 4. `coverage` = Σweight / edge length, clipped to [0, 1]. Attributes NaN below `min_coverage`.
 5. Aggregation per column: `weighted_mean` (numeric default), `majority` (other default), `max`, `min`.
 
-### Raster stats (`vegetation.py`)
+### Raster stats (`attributes/vegetation.py`)
 
 - exactextract (C++), `raster-sequential`: one pass over raster blocks, exact cell-coverage fractions. No per-edge reads/rasterisation.
 - Stats coverage-weighted (`all_touched=True` → weight 1 per touched cell). `count` = covered cells (fractional). `median` weighted.
 - `valid_fraction` = valid covered area / corridor area; off-raster area counts invalid (disjoint → 0).
 
-### Polygon overlay (`polygons.py`)
+### Polygon overlay (`attributes/polygons.py`)
 
 Polygons `shapely.prepare`d; pairs where polygon `contains_properly` target take full target measure. Overlay (`intersection`) only on boundary-crossing pairs: big land-cover polygons cost ~O(boundary edges), not O(all edges).
 
@@ -68,7 +83,7 @@ Region node: `kind=region`, concave-hull geometry, `n_members`, `n_internal_edge
 
 Caveats: fixed bins split values straddling a bin edge (9.9 / 10.1 with tol 10); kept edge geometry is original (may not end at region `x`/`y`); `orig_u`/`orig_v`/`orig_key` trace sources.
 
-## GeoSPARQL export (`geosparql.py`, `[rdf]` extra)
+## GeoSPARQL export (`io/geosparql.py`, `[rdf]` extra)
 
 GeoSPARQL 1.1 RDF for knowledge graphs / triplestores. GeoParquet stays primary (columnar, training input).
 

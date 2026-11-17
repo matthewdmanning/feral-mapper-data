@@ -21,7 +21,7 @@ import rasterio
 from exactextract import exact_extract
 from exactextract.raster import RasterioRasterSource
 
-from feral_mapper_data.geo.geometry import corridors
+from feral_mapper_data.geo.geometry import buffer_flat_corridors
 
 SUPPORTED_STATS = ("mean", "std", "min", "max", "median", "count")
 
@@ -50,7 +50,7 @@ def raster_corridor_stats(
     if bad:
         raise ValueError(f"Unsupported stats {sorted(bad)}; choose from {SUPPORTED_STATS}.")
     n = len(edges)
-    zones = gpd.GeoSeries(corridors(edges.geometry.to_numpy(), buffer_m), crs=edges.crs)
+    zones = gpd.GeoSeries(buffer_flat_corridors(edges.geometry.to_numpy(), buffer_m), crs=edges.crs)
 
     with rasterio.open(raster_path) as src:
         if src.crs is None:

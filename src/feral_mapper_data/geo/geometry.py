@@ -19,14 +19,14 @@ def clean_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf.explode(index_parts=False, ignore_index=True)
 
 
-def corridors(geoms: np.ndarray, buffer_m: float) -> np.ndarray:
+def buffer_flat_corridors(geoms: np.ndarray, buffer_m: float) -> np.ndarray:
     """Flat-capped corridors: stop at line ends, so values never bleed into neighbours."""
     if buffer_m <= 0:
         raise ValueError("buffer_m must be positive.")
     return shapely.buffer(geoms, buffer_m, cap_style="flat")
 
 
-def components(a: np.ndarray, b: np.ndarray, n: int) -> np.ndarray:
+def label_connected_components(a: np.ndarray, b: np.ndarray, n: int) -> np.ndarray:
     """Connected-component label per vertex ``0..n-1`` for undirected pairs ``(a, b)``."""
     adj = coo_array((np.ones(a.size, dtype=np.int8), (a, b)), shape=(n, n))
     return connected_components(adj, directed=False)[1]

@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import LineString
 
-from feral_mapper_data.network.edges import endpoints
-from feral_mapper_data.network.schema import EDGE_INDEX, check_index
+from feral_mapper_data.network.edges import line_endpoint_coordinates
+from feral_mapper_data.network.schema import EDGE_INDEX, require_edge_index
 
 
 def edges_from_graph(graph: nx.MultiDiGraph, crs: Any = None) -> gpd.GeoDataFrame:
@@ -43,7 +43,7 @@ def edges_from_graph(graph: nx.MultiDiGraph, crs: Any = None) -> gpd.GeoDataFram
 
 def node_coordinates(edges: gpd.GeoDataFrame) -> pd.DataFrame:
     """``x``/``y`` per node id (sorted), from the endpoints of an edge table."""
-    start, end = endpoints(edges.geometry.to_numpy())
+    start, end = line_endpoint_coordinates(edges.geometry.to_numpy())
     ids = np.concatenate(
         [edges.index.get_level_values("u").to_numpy(), edges.index.get_level_values("v").to_numpy()]
     )
@@ -56,10 +56,10 @@ def node_coordinates(edges: gpd.GeoDataFrame) -> pd.DataFrame:
 
 def graph_from_edges(edges: gpd.GeoDataFrame) -> nx.MultiDiGraph:
     """MultiDiGraph from an edge table; node ``x``/``y`` taken from line endpoints."""
-    check_index(edges)
+    require_edge_index(edges)
     graph = nx.MultiDiGraph(crs=edges.crs)
     xy = node_coordinates(edges)
-    graph.add_nodes_from(zip(xy.index, records(xy), strict=True))
+    graph.add_nodes_from(zip(xy.index, clean_row_dicts(xy), strict=True))
     add_edge_records(graph, edges)
     return graph
 
@@ -67,7 +67,8 @@ def graph_from_edges(edges: gpd.GeoDataFrame) -> nx.MultiDiGraph:
 def add_edge_records(graph: nx.MultiDiGraph, edges: pd.DataFrame) -> None:
     """Add every row of an edge table (indexed u, v, key) as an edge; NaN attributes skipped."""
     graph.add_edges_from(
-        (u, v, k, attrs) for (u, v, k), attrs in zip(edges.index, records(edges), strict=True)
+        (u, v, k, attrs)
+        for (u, v, k), attrs in zip(edges.index, clean_row_dicts(edges), strict=True)
     )
 
 
@@ -76,17 +77,17 @@ def attach_to_graph(graph: nx.MultiDiGraph, attributes: pd.DataFrame) -> nx.Mult
 
     Missing values are not written, so absent attributes stay absent.
     """
-    check_index(attributes)
+    require_edge_index(attributes)
     missing = [e for e in attributes.index if not graph.has_edge(*e)]
     if missing:
         raise KeyError(f"{len(missing)} attribute rows have no matching edge, e.g. {missing[0]}")
     out = graph.copy()
-    for (u, v, k), attrs in zip(attributes.index, records(attributes), strict=True):
+    for (u, v, k), attrs in zip(attributes.index, clean_row_dicts(attributes), strict=True):
         out.edges[u, v, k].update(attrs)
     return out
 
 
-def records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+def clean_row_dicts(frame: pd.DataFrame) -> list[dict[str, Any]]:
     """Row dicts with NaN/None dropped and numpy scalars unwrapped."""
     records = []
     for row in frame.to_dict(orient="records"):

@@ -1,4 +1,4 @@
-"""run() writes every configured output and is deterministic."""
+"""run_pipeline() writes every configured output and is deterministic."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from geopandas.testing import assert_geodataframe_equal
 
 from feral_mapper_data import graph_from_edges
 from feral_mapper_data.app.config import PipelineConfig
-from feral_mapper_data.app.pipeline import run
+from feral_mapper_data.app.pipeline import run_pipeline
 from tests.app.conftest import PIPELINE_TOML
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ COARSEN_TOML = textwrap.dedent(
 def _run_with(workspace, toml: str) -> gpd.GeoDataFrame:
     """Write ``toml`` as the workspace config and run the pipeline on it."""
     (workspace / "config.toml").write_text(toml)
-    return run(PipelineConfig.from_toml(workspace / "config.toml"))
+    return run_pipeline(PipelineConfig.from_toml(workspace / "config.toml"))
 
 
 # ---------------------------------------------------------------------------

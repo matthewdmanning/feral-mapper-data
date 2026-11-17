@@ -16,7 +16,7 @@ import shapely
 
 from feral_mapper_data.geo.aggregate import weighted_majority, weighted_mean
 from feral_mapper_data.geo.crs import align_crs
-from feral_mapper_data.geo.geometry import clean_geometries, corridors
+from feral_mapper_data.geo.geometry import buffer_flat_corridors, clean_geometries
 from feral_mapper_data.network.schema import require_columns, to_edge_frame
 
 
@@ -49,7 +49,7 @@ def polygon_attributes(
     targets = edges.geometry.to_numpy()
     measure = shapely.length
     if buffer_m is not None:
-        targets = corridors(targets, buffer_m)
+        targets = buffer_flat_corridors(targets, buffer_m)
         measure = shapely.area
 
     shapely.prepare(poly_geoms)  # segment index: fast repeated predicates on big polygons

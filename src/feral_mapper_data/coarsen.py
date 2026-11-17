@@ -28,9 +28,9 @@ import pandas as pd
 import shapely
 
 from feral_mapper_data.geo.aggregate import is_numeric, weighted_majority, weighted_mean
-from feral_mapper_data.geo.geometry import components
-from feral_mapper_data.network.graph import add_edge_records, node_coordinates, records
-from feral_mapper_data.network.schema import EDGE_INDEX, check_index, require_columns
+from feral_mapper_data.geo.geometry import label_connected_components
+from feral_mapper_data.network.graph import add_edge_records, clean_row_dicts, node_coordinates
+from feral_mapper_data.network.schema import EDGE_INDEX, require_columns, require_edge_index
 
 REGION_PREFIX = "region_"
 
@@ -54,7 +54,7 @@ class CoarseGraph:
 
     def to_networkx(self) -> nx.MultiDiGraph:
         graph = nx.MultiDiGraph(crs=self.edges.crs)
-        attrs = records(self.nodes.drop(columns=self.nodes.geometry.name))
+        attrs = clean_row_dicts(self.nodes.drop(columns=self.nodes.geometry.name))
         for record, geom in zip(attrs, self.nodes.geometry.to_numpy(), strict=True):
             record["geometry"] = geom
         graph.add_nodes_from(zip(self.nodes.index, attrs, strict=True))
@@ -102,7 +102,7 @@ def coarsen_homogeneous(
     ``tile_m`` caps region extent: regions never cross a square grid of this size (CRS units),
     bounding the spatial resolution lost. ``hull_ratio`` is shapely's concave-hull ratio.
     """
-    check_index(edges)
+    require_edge_index(edges)
     if min_region_nodes < 2:
         raise ValueError("min_region_nodes must be >= 2.")
     if tile_m is not None and tile_m <= 0:
@@ -130,7 +130,7 @@ def coarsen_homogeneous(
     if tile_m is not None:
         cell = np.floor(xy / tile_m).astype(np.int64)
         link &= (cell[pu] == cell[pv]).all(axis=1)
-    label = components(pu[link], pv[link], n_nodes)
+    label = label_connected_components(pu[link], pv[link], n_nodes)
     grouped = interior & (np.bincount(label)[label] >= min_region_nodes)
 
     # Region number per node (-1 = unmerged), ordered by first member: deterministic.

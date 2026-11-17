@@ -26,7 +26,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from feral_mapper_data.network.schema import check_index
+from feral_mapper_data.network.schema import require_edge_index
 
 if TYPE_CHECKING:
     from rdflib import Graph
@@ -79,7 +79,7 @@ def to_geosparql(
     def add_features(
         frame: gpd.GeoDataFrame, iris: list[URIRef], kinds: list[URIRef], skip: set[str]
     ) -> None:
-        wkts = _wkts(frame, wkt_crs)
+        wkts = _wkt_strings(frame, wkt_crs)
         metric_len = frame.geometry.length.to_numpy()
         metric_area = frame.geometry.area.to_numpy()
         attrs = frame.drop(columns=[frame.geometry.name, *skip], errors="ignore")
@@ -102,7 +102,7 @@ def to_geosparql(
         # Attributes column by column: one dtype decision and one NaN mask per column.
         iri_arr = np.asarray(iris, dtype=object)
         for col in attrs.columns:
-            pred, series, dt = fm[_local(str(col))], attrs[col], datatype(attrs[col])
+            pred, series, dt = fm[_iri_local_name(str(col))], attrs[col], datatype(attrs[col])
             mask = series.notna().to_numpy()
             values = series.to_numpy()[mask].tolist()  # numpy scalars -> Python
             for iri, value in zip(iri_arr[mask], values, strict=True):
@@ -110,7 +110,7 @@ def to_geosparql(
                 graph.add((iri, pred, lit))
 
     if edges is not None:
-        check_index(edges)
+        require_edge_index(edges)
         iris = [URIRef(f"{base_iri}edge/{u}_{v}_{k}") for u, v, k in edges.index]
         add_features(edges, iris, [fm.Edge] * len(iris), set())
         for iri, (u, v, _) in zip(iris, edges.index, strict=True):
@@ -141,7 +141,7 @@ def write_geosparql(graph: Graph, path: str | Path) -> Path:
     return path
 
 
-def _wkts(frame: gpd.GeoDataFrame, wkt_crs: str) -> list[str]:
+def _wkt_strings(frame: gpd.GeoDataFrame, wkt_crs: str) -> list[str]:
     if frame.crs is None:
         raise ValueError("Frame needs a CRS for GeoSPARQL export.")
     if wkt_crs == "crs84":
@@ -157,7 +157,7 @@ def _wkts(frame: gpd.GeoDataFrame, wkt_crs: str) -> list[str]:
     raise ValueError(f"wkt_crs must be 'crs84' or 'native', got {wkt_crs!r}.")
 
 
-def _local(name: str) -> str:
+def _iri_local_name(name: str) -> str:
     """IRI-safe local name for a column."""
     out = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
     return out if out and not out[0].isdigit() else f"c_{out}"

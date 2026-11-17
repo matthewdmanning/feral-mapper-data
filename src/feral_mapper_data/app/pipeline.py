@@ -101,7 +101,7 @@ def build_edge_attributes(config: PipelineConfig, edges: gpd.GeoDataFrame) -> pd
     return attrs
 
 
-def run(config: PipelineConfig) -> gpd.GeoDataFrame:
+def run_pipeline(config: PipelineConfig) -> gpd.GeoDataFrame:
     edges = load_edges(config)
     log.info("Loaded %d edges (CRS %s)", len(edges), edges.crs)
     attrs = build_edge_attributes(config, edges)
@@ -110,7 +110,7 @@ def run(config: PipelineConfig) -> gpd.GeoDataFrame:
     log.info("Wrote %s", config.output.edges)
     if config.output.graphml is not None:
         _write_graph(config, result, attrs, config.output.graphml)
-    coarse = _coarsen(config, result)
+    coarse = _coarsen_and_write(config, result)
     if config.output.geosparql is not None:
         from feral_mapper_data.io.geosparql import to_geosparql, write_geosparql
 
@@ -124,7 +124,7 @@ def run(config: PipelineConfig) -> gpd.GeoDataFrame:
     return result
 
 
-def _coarsen(config: PipelineConfig, result: gpd.GeoDataFrame) -> CoarseGraph | None:
+def _coarsen_and_write(config: PipelineConfig, result: gpd.GeoDataFrame) -> CoarseGraph | None:
     if (cc := config.coarsen) is None:
         return None
     coarse = coarsen_homogeneous(result, **asdict(cc))  # config fields mirror the signature

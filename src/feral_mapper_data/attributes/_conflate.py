@@ -18,7 +18,7 @@ import shapely
 
 from feral_mapper_data.geo.aggregate import is_numeric, weighted_majority, weighted_mean
 from feral_mapper_data.geo.crs import align_crs
-from feral_mapper_data.geo.geometry import clean_geometries, corridors
+from feral_mapper_data.geo.geometry import buffer_flat_corridors, clean_geometries
 from feral_mapper_data.network.schema import require_columns, to_edge_frame
 
 Aggregation = Literal["weighted_mean", "majority", "max", "min"]
@@ -49,7 +49,7 @@ def conflate_lines(
 
     source = clean_geometries(align_crs(source, edges, name)[[*columns, source.geometry.name]])
     edge_geoms = edges.geometry.to_numpy()
-    zones = corridors(edge_geoms, buffer_m)
+    zones = buffer_flat_corridors(edge_geoms, buffer_m)
     src_geoms = source.geometry.to_numpy()
 
     src_i, edge_i = shapely.STRtree(zones).query(src_geoms, predicate="intersects")
@@ -67,7 +67,7 @@ def conflate_lines(
     for col in columns:
         values = source[col].iloc[src_i].reset_index(drop=True)
         agg = aggregations.get(col) or ("weighted_mean" if is_numeric(source[col]) else "majority")
-        by_pos[f"{prefix}{col}"] = _aggregate(agg, edge_i, values, weights)
+        by_pos[f"{prefix}{col}"] = _aggregate_by_edge(agg, edge_i, values, weights)
 
     out = to_edge_frame(edges, by_pos)
     out[f"{prefix}coverage"] = coverage
@@ -76,7 +76,9 @@ def conflate_lines(
     return out
 
 
-def _aggregate(agg: str, edge_i: np.ndarray, values: pd.Series, weights: np.ndarray) -> pd.Series:
+def _aggregate_by_edge(
+    agg: str, edge_i: np.ndarray, values: pd.Series, weights: np.ndarray
+) -> pd.Series:
     if agg == "weighted_mean":
         return weighted_mean(edge_i, values, weights)
     if agg == "majority":

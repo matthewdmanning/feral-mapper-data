@@ -6,7 +6,7 @@ import geopandas as gpd
 import numpy as np
 import shapely
 
-from feral_mapper_data.geo.geometry import clean_geometries, components
+from feral_mapper_data.geo.geometry import clean_geometries, label_connected_components
 from feral_mapper_data.network.schema import EDGE_INDEX
 
 
@@ -24,7 +24,7 @@ def edges_from_lines(lines: gpd.GeoDataFrame, node_tolerance: float = 0.5) -> gp
     geoms = lines.geometry.to_numpy()
     if not np.all(shapely.get_type_id(geoms) == 1):
         raise TypeError("Network layer must contain only (Multi)LineString geometries.")
-    node_ids = cluster_points(np.vstack(endpoints(geoms)), node_tolerance)
+    node_ids = cluster_points(np.vstack(line_endpoint_coordinates(geoms)), node_tolerance)
     n = len(geoms)
     out = lines.copy()
     out["u"], out["v"] = node_ids[:n], node_ids[n:]
@@ -37,10 +37,10 @@ def cluster_points(xy: np.ndarray, tolerance: float) -> np.ndarray:
     uniq, inverse = np.unique(xy, axis=0, return_inverse=True)  # exact duplicates first
     pts = shapely.points(uniq)
     a, b = shapely.STRtree(pts).query(pts, predicate="dwithin", distance=tolerance)
-    return components(a, b, len(uniq))[inverse.ravel()].astype(np.int64)
+    return label_connected_components(a, b, len(uniq))[inverse.ravel()].astype(np.int64)
 
 
-def endpoints(geoms: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def line_endpoint_coordinates(geoms: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(start, end) coordinate arrays, shape (n, 2), of line geometries."""
     return (
         shapely.get_coordinates(shapely.get_point(geoms, 0)),

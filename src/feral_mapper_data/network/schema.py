@@ -10,7 +10,7 @@ import pandas as pd
 EDGE_INDEX: tuple[str, str, str] = ("u", "v", "key")
 
 
-def check_index(frame: pd.DataFrame) -> None:
+def require_edge_index(frame: pd.DataFrame) -> None:
     if list(frame.index.names) != list(EDGE_INDEX):
         raise ValueError(f"Frame must be indexed by {EDGE_INDEX}, got {frame.index.names}.")
 
