@@ -16,7 +16,7 @@ from feral_mapper_data.attributes.vegetation import raster_corridor_stats
 from feral_mapper_data.coarsen import CoarseGraph, coarsen_homogeneous
 from feral_mapper_data.config import PipelineConfig
 from feral_mapper_data.geo.crs import ensure_projected
-from feral_mapper_data.io import read_graphml, read_vector, write_graphml, write_vector
+from feral_mapper_data.io.files import read_graphml, read_vector, write_graphml, write_vector
 from feral_mapper_data.network.edges import edges_from_lines
 from feral_mapper_data.network.graph import attach_to_graph, edges_from_graph, graph_from_edges
 
@@ -112,7 +112,7 @@ def run(config: PipelineConfig) -> gpd.GeoDataFrame:
         _write_graph(config, result, attrs, config.output.graphml)
     coarse = _coarsen(config, result)
     if config.output.geosparql is not None:
-        from feral_mapper_data.geosparql import to_geosparql, write_geosparql
+        from feral_mapper_data.io.geosparql import to_geosparql, write_geosparql
 
         crs = config.output.geosparql_crs
         if coarse is not None:
