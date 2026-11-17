@@ -13,16 +13,10 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from feral_mapper_data._util import (
-    clean_geometries,
-    corridors,
-    require_columns,
-    slug,
-    to_edge_frame,
-    weighted_majority,
-    weighted_mean,
-)
-from feral_mapper_data.crs import align_crs
+from feral_mapper_data._util import require_columns, slug, to_edge_frame
+from feral_mapper_data.geo.aggregate import weighted_majority, weighted_mean
+from feral_mapper_data.geo.crs import align_crs
+from feral_mapper_data.geo.geometry import clean_geometries, corridors
 
 
 def polygon_attributes(

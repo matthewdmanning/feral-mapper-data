@@ -27,13 +27,9 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from feral_mapper_data._util import (
-    components,
-    is_numeric,
-    require_columns,
-    weighted_majority,
-    weighted_mean,
-)
+from feral_mapper_data._util import require_columns
+from feral_mapper_data.geo.aggregate import is_numeric, weighted_majority, weighted_mean
+from feral_mapper_data.geo.geometry import components
 from feral_mapper_data.graph import (
     EDGE_INDEX,
     _check_index,

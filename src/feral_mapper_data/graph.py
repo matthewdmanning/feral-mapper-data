@@ -16,7 +16,7 @@ import pandas as pd
 import shapely
 from shapely.geometry import LineString
 
-from feral_mapper_data._util import clean_geometries, components
+from feral_mapper_data.geo.geometry import clean_geometries, components
 
 EDGE_INDEX: tuple[str, str, str] = ("u", "v", "key")
 

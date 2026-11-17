@@ -11,7 +11,7 @@ import pandas as pd
 
 from feral_mapper_data.coarsen import CoarseGraph, coarsen_homogeneous
 from feral_mapper_data.config import PipelineConfig
-from feral_mapper_data.crs import ensure_projected
+from feral_mapper_data.geo.crs import ensure_projected
 from feral_mapper_data.graph import (
     attach_to_graph,
     edges_from_graph,

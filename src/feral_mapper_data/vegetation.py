@@ -21,7 +21,7 @@ import rasterio
 from exactextract import exact_extract
 from exactextract.raster import RasterioRasterSource
 
-from feral_mapper_data._util import corridors
+from feral_mapper_data.geo.geometry import corridors
 
 SUPPORTED_STATS = ("mean", "std", "min", "max", "median", "count")
 
