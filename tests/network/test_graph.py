@@ -73,6 +73,26 @@ def test_edges_from_graph_builds_missing_geometry():
     assert out["speed"].iloc[0] == 30
 
 
+def test_edges_from_graph_mixed_geometry():
+    g = nx.MultiDiGraph(crs=CRS)
+    g.add_node(1, x=0.0, y=0.0)
+    g.add_node(2, x=3.0, y=4.0)
+    g.add_edge(1, 2, 0, geometry=line((0, 0), (1, 0), (3, 4)))
+    g.add_edge(2, 1, 0, speed=30)
+    out = edges_from_graph(g)
+    assert list(out.index.names) == ["u", "v", "key"]
+    assert out.geometry.iloc[0].length == pytest.approx(1.0 + np.hypot(2, 4))
+    assert list(out.geometry.iloc[1].coords) == [(3.0, 4.0), (0.0, 0.0)]
+    assert out["speed"].isna().tolist() == [True, False]
+
+
+def test_edges_from_graph_empty():
+    out = edges_from_graph(nx.MultiDiGraph(crs=CRS))
+    assert out.empty
+    assert list(out.index.names) == ["u", "v", "key"]
+    assert out.crs == CRS
+
+
 def test_snapping_has_no_grid_border_artifacts():
     # 0.24 and 0.26 round to different 0.5 m grid cells but are 0.02 m apart
     lines = gpd.GeoDataFrame(

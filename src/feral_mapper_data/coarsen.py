@@ -14,6 +14,10 @@ Algorithm (deterministic, O(E)):
    Components: scipy sparse ``connected_components``; all steps positional numpy.
 4. Edges with both ends in one region are absorbed (summarised on the region); all others are
    re-pointed to region ids. Boundary nodes are never merged, so class borders stay exact.
+
+Ids: node ids must be integers (osmnx and ``edges_from_lines`` both give int64). Region ids
+continue the sequence, ``max(node_id) + 1 + rank``, so every coarse id is int64; ``kind`` tells
+regions from nodes.
 """
 
 from __future__ import annotations
@@ -32,14 +36,12 @@ from feral_mapper_data.geo.geometry import label_connected_components
 from feral_mapper_data.network.graph import add_edge_records, clean_row_dicts, node_coordinates
 from feral_mapper_data.network.schema import EDGE_INDEX, require_columns, require_edge_index
 
-REGION_PREFIX = "region_"
-
 
 @dataclass(frozen=True)
 class CoarseGraph:
     """Coarsened network.
 
-    - ``nodes``: GeoDataFrame indexed by coarse node id. ``kind`` is ``node`` (Point at the
+    - ``nodes``: GeoDataFrame indexed by int64 coarse node id. ``kind`` is ``node`` (Point at the
       original node) or ``region`` (concave hull of absorbed edges). ``x``/``y`` is a real member
       node (the one nearest the region centroid), so regions stay snapped to the network.
     - ``edges``: surviving edges re-indexed ``(u, v, key)`` on coarse ids; ``orig_u``/``orig_v``/
@@ -112,6 +114,10 @@ def coarsen_homogeneous(
 
     # Positional node ids: node_xy.index is the sorted unique node set.
     node_xy = node_coordinates(edges)
+    node_ids = node_xy.index.to_numpy()
+    if not np.issubdtype(node_ids.dtype, np.integer):
+        raise TypeError(f"Coarsening needs integer node ids, got dtype {node_ids.dtype}.")
+    node_ids = node_ids.astype(np.int64)
     xy = node_xy[["x", "y"]].to_numpy()
     n_nodes = len(node_xy)
     pu = node_xy.index.get_indexer(edges.index.get_level_values("u"))
@@ -138,20 +144,25 @@ def coarsen_homogeneous(
     rank = np.full(label.max() + 1, -1)
     rank[uniq[np.argsort(first)]] = np.arange(uniq.size)
     region = np.where(grouped, rank[label], -1)
-    region_ids = np.array([f"{REGION_PREFIX}{i}" for i in range(uniq.size)], dtype=object)
+    first_region_id = int(node_ids.max()) + 1 if n_nodes else 0
+    region_ids = first_region_id + np.arange(uniq.size, dtype=np.int64)
 
-    coarse_id = node_xy.index.to_numpy(dtype=object).copy()
+    coarse_id = node_ids.copy()
     coarse_id[grouped] = region_ids[region[grouped]]
     ru = region[pu]
     internal = (ru >= 0) & (ru == region[pv])
 
-    nodes = _node_table(edges, columns, node_xy, region, region_ids, ru, internal, hull_ratio)
+    nodes = _node_table(
+        edges, columns, node_xy, node_ids, region, region_ids, ru, internal, hull_ratio
+    )
     kept = edges.loc[~internal].reset_index()
     kept[["orig_u", "orig_v", "orig_key"]] = kept[list(EDGE_INDEX)]
     kept["u"], kept["v"] = coarse_id[pu[~internal]], coarse_id[pv[~internal]]
     kept["key"] = kept.groupby(["u", "v"]).cumcount()
     kept = kept.set_index(list(EDGE_INDEX))
-    membership = pd.Series(coarse_id, index=node_xy.index, name="coarse_node")
+    membership = pd.Series(
+        coarse_id, index=pd.Index(node_ids, name=node_xy.index.name), name="coarse_node"
+    )
     return CoarseGraph(nodes=nodes, edges=kept, membership=membership)
 
 
@@ -159,6 +170,7 @@ def _node_table(
     edges: gpd.GeoDataFrame,
     columns: Sequence[str],
     node_xy: pd.DataFrame,
+    node_ids: np.ndarray,
     region: np.ndarray,
     region_ids: np.ndarray,
     ru: np.ndarray,
@@ -207,9 +219,7 @@ def _node_table(
             ],
             "area_m2": np.r_[np.zeros(plain.sum()), shapely.area(hulls)],
         },
-        index=pd.Index(
-            np.r_[node_xy.index.to_numpy(dtype=object)[plain], region_ids], dtype=object
-        ),
+        index=pd.Index(np.r_[node_ids[plain], region_ids], dtype=np.int64),
     )
     sub = edges.iloc[np.flatnonzero(internal)]
     for col in columns:

@@ -13,7 +13,7 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
-from shapely.geometry import LineString
+import shapely
 
 from feral_mapper_data.network.edges import line_endpoint_coordinates
 from feral_mapper_data.network.schema import EDGE_INDEX, require_edge_index
@@ -27,18 +27,28 @@ def edges_from_graph(graph: nx.MultiDiGraph, crs: Any = None) -> gpd.GeoDataFram
     crs = crs if crs is not None else graph.graph.get("crs")
     if crs is None:
         raise ValueError("Graph has no 'crs' in graph.graph; pass crs explicitly.")
-    rows, index = [], []
-    for u, v, k, data in graph.edges(keys=True, data=True):
-        attrs = dict(data)
-        geom = attrs.pop("geometry", None)
-        if geom is None:
-            nu, nv = graph.nodes[u], graph.nodes[v]
-            geom = LineString([(nu["x"], nu["y"]), (nv["x"], nv["y"])])
-        attrs["geometry"] = geom
-        rows.append(attrs)
-        index.append((u, v, k))
-    mi = pd.MultiIndex.from_tuples(index, names=list(EDGE_INDEX))
-    return gpd.GeoDataFrame(rows, index=mi, geometry="geometry", crs=crs)
+    us, vs, ks, data = [], [], [], []
+    for u, v, k, d in graph.edges(keys=True, data=True):
+        us.append(u)
+        vs.append(v)
+        ks.append(k)
+        data.append(d)
+    mi = pd.MultiIndex.from_arrays([us, vs, ks], names=list(EDGE_INDEX))
+    frame = pd.DataFrame.from_records(data)
+    frame.index = mi
+    if "geometry" not in frame.columns:
+        frame["geometry"] = None
+    geoms = frame["geometry"].to_numpy(dtype=object, copy=True)
+    missing = pd.isna(geoms)
+    if missing.any():
+        x = pd.Series(dict(graph.nodes(data="x")), dtype=float)
+        y = pd.Series(dict(graph.nodes(data="y")), dtype=float)
+        ends = []
+        for nodes in (np.asarray(us, dtype=object)[missing], np.asarray(vs, dtype=object)[missing]):
+            ends.append(np.column_stack([x.reindex(nodes).to_numpy(), y.reindex(nodes).to_numpy()]))
+        geoms[missing] = shapely.linestrings(np.stack(ends, axis=1))
+    frame["geometry"] = geoms
+    return gpd.GeoDataFrame(frame, geometry="geometry", crs=crs)
 
 
 def node_coordinates(edges: gpd.GeoDataFrame) -> pd.DataFrame:
