@@ -6,6 +6,7 @@ flat-capped corridor (area). Overlapping polygons in one layer can push fraction
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import geopandas as gpd
@@ -13,16 +14,10 @@ import numpy as np
 import pandas as pd
 import shapely
 
-from feral_mapper_data._util import (
-    clean_geometries,
-    corridors,
-    require_columns,
-    slug,
-    to_edge_frame,
-    weighted_majority,
-    weighted_mean,
-)
-from feral_mapper_data.crs import align_crs
+from feral_mapper_data.geo.aggregate import weighted_majority, weighted_mean
+from feral_mapper_data.geo.crs import align_crs
+from feral_mapper_data.geo.geometry import buffer_flat_corridors, clean_geometries
+from feral_mapper_data.network.schema import require_columns, to_edge_frame
 
 
 def polygon_attributes(
@@ -54,7 +49,7 @@ def polygon_attributes(
     targets = edges.geometry.to_numpy()
     measure = shapely.length
     if buffer_m is not None:
-        targets = corridors(targets, buffer_m)
+        targets = buffer_flat_corridors(targets, buffer_m)
         measure = shapely.area
 
     shapely.prepare(poly_geoms)  # segment index: fast repeated predicates on big polygons
@@ -73,7 +68,7 @@ def polygon_attributes(
     frac_cols: list[str] = []
     if category_column is not None:
         cats = polygons[category_column].iloc[poly_i].reset_index(drop=True)
-        frame = pd.DataFrame({"e": edge_i, "c": cats.map(slug), "a": amount})
+        frame = pd.DataFrame({"e": edge_i, "c": cats.map(_slug), "a": amount})
         sums = frame.pivot_table(index="e", columns="c", values="a", aggfunc="sum", fill_value=0.0)
         for cat in sorted(sums.columns):
             frac_cols.append(f"{prefix}{cat}_frac")
@@ -89,3 +84,9 @@ def polygon_attributes(
     covered = np.bincount(edge_i, weights=amount, minlength=len(edges))
     out[f"{prefix}coverage"] = covered / safe_total
     return out
+
+
+def _slug(value: object) -> str:
+    """Column-safe lowercase name for a category value."""
+    text = re.sub(r"[^0-9a-zA-Z]+", "_", str(value)).strip("_").lower()
+    return text or "blank"

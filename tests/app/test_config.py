@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from feral_mapper_data.config import ConfigError, PipelineConfig
+from feral_mapper_data.app.config import ConfigError, PipelineConfig
 
 # ---------------------------------------------------------------------------
 # Validation

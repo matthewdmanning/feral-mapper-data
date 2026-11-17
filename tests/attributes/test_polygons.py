@@ -4,6 +4,7 @@ import pytest
 from shapely.geometry import box
 
 from feral_mapper_data import polygon_attributes
+from feral_mapper_data.attributes.polygons import _slug as slug
 from tests.conftest import CRS, X0, Y0, by_name
 
 
@@ -54,3 +55,8 @@ def test_validation(edges, landcover):
     lines = gpd.GeoDataFrame({"class": ["x"]}, geometry=[edges.geometry.iloc[0]], crs=CRS)
     with pytest.raises(TypeError):
         polygon_attributes(edges, lines, category_column="class")
+
+
+def test_slug():
+    assert slug("Urban Core!") == "urban_core"
+    assert slug("") == "blank"

@@ -23,7 +23,7 @@ osm = ["osmnx>=2.0"]
 rdf = ["rdflib>=7.1"]
 
 [project.scripts]
-feral-edges = "feral_mapper_data.cli:main"
+feral-edges = "feral_mapper_data.app.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pandas-stubs"]

@@ -7,8 +7,9 @@ import networkx as nx
 import pytest
 from shapely.geometry import box
 
-from feral_mapper_data.cli import main
-from tests.conftest import CRS, PIPELINE_TOML, X0, Y0
+from feral_mapper_data.app.cli import main
+from tests.app.conftest import PIPELINE_TOML
+from tests.conftest import CRS, X0, Y0
 
 # ---------------------------------------------------------------------------
 # End to end

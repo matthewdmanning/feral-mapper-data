@@ -117,20 +117,22 @@ class PipelineConfig:
             if required not in raw:
                 raise ConfigError(f"Missing [{required}] section.")
 
-        def one(kind: type[T], key: str) -> T | None:
-            return _build(kind, raw[key], key, base_dir) if key in raw else None
+        def optional_table(kind: type[T], key: str) -> T | None:
+            return _build_section(kind, raw[key], key, base_dir) if key in raw else None
 
-        def many(kind: type[T], key: str) -> list[T]:
+        def table_array(kind: type[T], key: str) -> list[T]:
             items = raw.get(key, [])
             if not isinstance(items, list):
                 raise ConfigError(f"[{key}] must be an array of tables: use [[{key}]].")
-            return [_build(kind, item, f"{key}[{i}]", base_dir) for i, item in enumerate(items)]
+            return [
+                _build_section(kind, item, f"{key}[{i}]", base_dir) for i, item in enumerate(items)
+            ]
 
-        traffic = one(TrafficConfig, "traffic")
+        traffic = optional_table(TrafficConfig, "traffic")
         if traffic is not None and traffic.segments is None and traffic.stations is None:
             raise ConfigError("[traffic] needs 'segments' and/or 'stations'.")
-        output = _build(OutputConfig, raw["output"], "output", base_dir)
-        coarsen = one(CoarsenConfig, "coarsen")
+        output = _build_section(OutputConfig, raw["output"], "output", base_dir)
+        coarsen = optional_table(CoarsenConfig, "coarsen")
         coarse_outputs = (output.coarse_nodes, output.coarse_edges, output.coarse_graphml)
         if coarsen is not None and all(p is None for p in coarse_outputs):
             raise ConfigError(
@@ -141,13 +143,13 @@ class PipelineConfig:
         if output.geosparql_crs not in ("crs84", "native"):
             raise ConfigError("[output] geosparql_crs must be 'crs84' or 'native'.")
         return cls(
-            network=_build(NetworkConfig, raw["network"], "network", base_dir),
+            network=_build_section(NetworkConfig, raw["network"], "network", base_dir),
             output=output,
             coarsen=coarsen,
-            roadway=one(RoadwayConfig, "roadway"),
+            roadway=optional_table(RoadwayConfig, "roadway"),
             traffic=traffic,
-            vegetation=many(VegetationConfig, "vegetation"),
-            polygons=many(PolygonConfig, "polygons"),
+            vegetation=table_array(VegetationConfig, "vegetation"),
+            polygons=table_array(PolygonConfig, "polygons"),
         )
 
 
@@ -172,7 +174,7 @@ def _reject_unknown(kind: type, raw: dict[str, Any], where: str) -> None:
         raise ConfigError(f"Unknown keys in [{where}]: {sorted(unknown)}")
 
 
-def _build[T](kind: type[T], raw: dict[str, Any], where: str, base_dir: Path) -> T:
+def _build_section[T](kind: type[T], raw: dict[str, Any], where: str, base_dir: Path) -> T:
     _reject_unknown(kind, raw, where)
     values = {k: (base_dir / v if k in _PATH_KEYS else v) for k, v in raw.items()}
     try:

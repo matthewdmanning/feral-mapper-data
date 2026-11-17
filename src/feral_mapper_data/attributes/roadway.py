@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 import geopandas as gpd
 import pandas as pd
 
-from feral_mapper_data.conflate import Aggregation, conflate_lines
+from feral_mapper_data.attributes._conflate import Aggregation, conflate_lines
 
 
 def roadway_attributes(

@@ -6,8 +6,8 @@ import argparse
 import logging
 import sys
 
-from feral_mapper_data.config import ConfigError, PipelineConfig
-from feral_mapper_data.pipeline import run
+from feral_mapper_data.app.config import ConfigError, PipelineConfig
+from feral_mapper_data.app.pipeline import run_pipeline
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, FileNotFoundError) as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
-    run(config)
+    run_pipeline(config)
     return 0
 
 
