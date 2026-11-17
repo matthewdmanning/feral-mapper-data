@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from feral_mapper_data import roadway_attributes
-from feral_mapper_data.conflate import conflate_lines
+from feral_mapper_data.attributes._conflate import conflate_lines
 from tests.conftest import CRS, by_name, line
 
 
