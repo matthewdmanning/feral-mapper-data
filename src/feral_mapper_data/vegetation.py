@@ -21,6 +21,8 @@ import rasterio
 from exactextract import exact_extract
 from exactextract.raster import RasterioRasterSource
 
+from feral_mapper_data._util import corridors
+
 SUPPORTED_STATS = ("mean", "std", "min", "max", "median", "count")
 
 
@@ -47,15 +49,13 @@ def raster_corridor_stats(
     bad = set(stats) - set(SUPPORTED_STATS)
     if bad:
         raise ValueError(f"Unsupported stats {sorted(bad)}; choose from {SUPPORTED_STATS}.")
-    if buffer_m <= 0:
-        raise ValueError("buffer_m must be positive.")
     n = len(edges)
-    corridors = edges.geometry.buffer(buffer_m, cap_style="flat")
+    zones = gpd.GeoSeries(corridors(edges.geometry.to_numpy(), buffer_m), crs=edges.crs)
 
     with rasterio.open(raster_path) as src:
         if src.crs is None:
             raise ValueError(f"Raster {raster_path} has no CRS.")
-        vec = gpd.GeoDataFrame(geometry=corridors.to_crs(src.crs).to_numpy(), crs=src.crs)
+        vec = gpd.GeoDataFrame(geometry=zones.to_crs(src.crs))
         cell_area = abs(src.transform.a * src.transform.e - src.transform.b * src.transform.d)
         extracted = exact_extract(
             RasterioRasterSource(src, band),
@@ -108,14 +108,11 @@ def _weighted_median(feat: np.ndarray, vals: np.ndarray, w: np.ndarray, n: int) 
     if feat.size == 0:
         return out
     order = np.lexsort((vals, feat))
-    f, v, cw = feat[order], vals[order], np.cumsum(w[order])
-    starts = np.r_[0, np.flatnonzero(np.diff(f)) + 1]
-    base = np.r_[0.0, cw[starts[1:] - 1]]
-    total = np.bincount(f, weights=w[order], minlength=n)[f[starts]]
-    rel = cw - np.repeat(base, np.diff(np.r_[starts, f.size]))
-    half = np.repeat(total / 2, np.diff(np.r_[starts, f.size]))
-    first = pd.Series(np.flatnonzero(rel >= half - 1e-12)).groupby(f[rel >= half - 1e-12]).first()
-    out[first.index.to_numpy()] = v[first.to_numpy()]
+    f, v, ww = feat[order], vals[order], w[order]
+    within = pd.Series(ww).groupby(f).cumsum().to_numpy()  # cumulative weight per group
+    hit = np.flatnonzero(within >= np.bincount(f, weights=ww, minlength=n)[f] / 2 - 1e-12)
+    first = np.r_[True, f[hit][1:] != f[hit][:-1]]  # first crossing per group
+    out[f[hit][first]] = v[hit][first]
     return out
 
 

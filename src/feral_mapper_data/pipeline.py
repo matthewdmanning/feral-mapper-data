@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 import geopandas as gpd
@@ -130,21 +131,14 @@ def run(config: PipelineConfig) -> gpd.GeoDataFrame:
 def _coarsen(config: PipelineConfig, result: gpd.GeoDataFrame) -> CoarseGraph | None:
     if (cc := config.coarsen) is None:
         return None
-    coarse = coarsen_homogeneous(
-        result,
-        cc.columns,
-        tolerances=cc.tolerances,
-        min_region_nodes=cc.min_region_nodes,
-        tile_m=cc.tile_m,
-        hull_ratio=cc.hull_ratio,
-    )
+    coarse = coarsen_homogeneous(result, **asdict(cc))  # config fields mirror the signature
     n_in = len(coarse.membership)
     log.info("Coarsened %d nodes -> %d (%d edges kept)", n_in, len(coarse.nodes), len(coarse.edges))
     out = config.output
     if out.coarse_nodes is not None:
         nodes = coarse.nodes.assign(
-            members=coarse.membership.groupby(coarse.membership)
-            .apply(list)
+            members=coarse.membership.groupby(coarse.membership, sort=False)
+            .agg(list)
             .reindex(coarse.nodes.index)
         )
         nodes.index = nodes.index.astype(str)

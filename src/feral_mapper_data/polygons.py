@@ -15,6 +15,7 @@ import shapely
 
 from feral_mapper_data._util import (
     clean_geometries,
+    corridors,
     require_columns,
     slug,
     to_edge_frame,
@@ -41,8 +42,6 @@ def polygon_attributes(
     """
     if category_column is None and not value_columns:
         raise ValueError("Provide category_column and/or value_columns.")
-    if buffer_m is not None and buffer_m <= 0:
-        raise ValueError("buffer_m must be positive.")
     cols = [c for c in (category_column, *value_columns) if c is not None]
     require_columns(polygons, cols, "polygon")
     polygons = clean_geometries(
@@ -55,7 +54,7 @@ def polygon_attributes(
     targets = edges.geometry.to_numpy()
     measure = shapely.length
     if buffer_m is not None:
-        targets = shapely.buffer(targets, buffer_m, cap_style="flat")
+        targets = corridors(targets, buffer_m)
         measure = shapely.area
 
     shapely.prepare(poly_geoms)  # segment index: fast repeated predicates on big polygons

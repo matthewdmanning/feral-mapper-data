@@ -14,11 +14,9 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import shapely
-from scipy.sparse import coo_array
-from scipy.sparse.csgraph import connected_components
 from shapely.geometry import LineString
 
-from feral_mapper_data._util import clean_geometries
+from feral_mapper_data._util import clean_geometries, components
 
 EDGE_INDEX: tuple[str, str, str] = ("u", "v", "key")
 
@@ -59,9 +57,7 @@ def edges_from_lines(lines: gpd.GeoDataFrame, node_tolerance: float = 0.5) -> gp
     geoms = lines.geometry.to_numpy()
     if not np.all(shapely.get_type_id(geoms) == 1):
         raise TypeError("Network layer must contain only (Multi)LineString geometries.")
-    start = shapely.get_coordinates(shapely.get_point(geoms, 0))
-    end = shapely.get_coordinates(shapely.get_point(geoms, -1))
-    node_ids = cluster_points(np.vstack([start, end]), node_tolerance)
+    node_ids = cluster_points(np.vstack(endpoints(geoms)), node_tolerance)
     n = len(geoms)
     out = lines.copy()
     out["u"], out["v"] = node_ids[:n], node_ids[n:]
@@ -74,30 +70,45 @@ def cluster_points(xy: np.ndarray, tolerance: float) -> np.ndarray:
     uniq, inverse = np.unique(xy, axis=0, return_inverse=True)  # exact duplicates first
     pts = shapely.points(uniq)
     a, b = shapely.STRtree(pts).query(pts, predicate="dwithin", distance=tolerance)
-    adj = coo_array((np.ones(a.size, dtype=np.int8), (a, b)), shape=(len(uniq), len(uniq)))
-    _, labels = connected_components(adj, directed=False)
-    return labels[inverse.ravel()].astype(np.int64)
+    return components(a, b, len(uniq))[inverse.ravel()].astype(np.int64)
+
+
+def endpoints(geoms: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(start, end) coordinate arrays, shape (n, 2), of line geometries."""
+    return (
+        shapely.get_coordinates(shapely.get_point(geoms, 0)),
+        shapely.get_coordinates(shapely.get_point(geoms, -1)),
+    )
+
+
+def node_coordinates(edges: gpd.GeoDataFrame) -> pd.DataFrame:
+    """``x``/``y`` per node id (sorted), from the endpoints of an edge table."""
+    start, end = endpoints(edges.geometry.to_numpy())
+    ids = np.concatenate(
+        [edges.index.get_level_values("u").to_numpy(), edges.index.get_level_values("v").to_numpy()]
+    )
+    return (
+        pd.DataFrame(np.vstack([start, end]), columns=["x", "y"], index=ids)
+        .groupby(level=0)
+        .first()
+    )
 
 
 def graph_from_edges(edges: gpd.GeoDataFrame) -> nx.MultiDiGraph:
     """MultiDiGraph from an edge table; node ``x``/``y`` taken from line endpoints."""
     _check_index(edges)
     graph = nx.MultiDiGraph(crs=edges.crs)
-    geoms = edges.geometry.to_numpy()
-    start = shapely.get_coordinates(shapely.get_point(geoms, 0))
-    end = shapely.get_coordinates(shapely.get_point(geoms, -1))
-    u = edges.index.get_level_values("u")
-    v = edges.index.get_level_values("v")
-    xy = pd.DataFrame(np.vstack([start, end]), columns=["x", "y"], index=u.append(v))
-    xy = xy[~xy.index.duplicated()]
-    graph.add_nodes_from(
-        (n, {"x": float(x), "y": float(y)})
-        for n, x, y in zip(xy.index, xy["x"], xy["y"], strict=True)
-    )
+    xy = node_coordinates(edges)
+    graph.add_nodes_from(zip(xy.index, _records(xy), strict=True))
+    add_edge_records(graph, edges)
+    return graph
+
+
+def add_edge_records(graph: nx.MultiDiGraph, edges: pd.DataFrame) -> None:
+    """Add every row of an edge table (indexed u, v, key) as an edge; NaN attributes skipped."""
     graph.add_edges_from(
         (u, v, k, attrs) for (u, v, k), attrs in zip(edges.index, _records(edges), strict=True)
     )
-    return graph
 
 
 def attach_to_graph(graph: nx.MultiDiGraph, attributes: pd.DataFrame) -> nx.MultiDiGraph:

@@ -11,7 +11,7 @@ Algorithm (deterministic, O(E)):
 2. Interior node = every incident edge has the same class (and, with ``tile_m``, same tile).
 3. Connected components of interior nodes, linked by edges, are regions. Regions with fewer than
    ``min_region_nodes`` nodes are left as-is.
-   Components: scipy sparse ``connected_components`` (C, no Python graph objects).
+   Components: scipy sparse ``connected_components``; all steps positional numpy.
 4. Edges with both ends in one region are absorbed (summarised on the region); all others are
    re-pointed to region ids. Boundary nodes are never merged, so class borders stay exact.
 """
@@ -20,18 +20,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
 import shapely
-from scipy.sparse import coo_array
-from scipy.sparse.csgraph import connected_components
 
-from feral_mapper_data._util import is_numeric, require_columns, weighted_majority, weighted_mean
-from feral_mapper_data.graph import EDGE_INDEX, _check_index, _records
+from feral_mapper_data._util import (
+    components,
+    is_numeric,
+    require_columns,
+    weighted_majority,
+    weighted_mean,
+)
+from feral_mapper_data.graph import (
+    EDGE_INDEX,
+    _check_index,
+    _records,
+    add_edge_records,
+    node_coordinates,
+)
 
 REGION_PREFIX = "region_"
 
@@ -55,11 +64,11 @@ class CoarseGraph:
 
     def to_networkx(self) -> nx.MultiDiGraph:
         graph = nx.MultiDiGraph(crs=self.edges.crs)
-        node_attrs = self.nodes.drop(columns=self.nodes.geometry.name)
-        for nid, attrs in zip(node_attrs.index, _records(node_attrs), strict=True):
-            graph.add_node(nid, **attrs, geometry=self.nodes.geometry.loc[nid])
-        for (u, v, k), attrs in zip(self.edges.index, _records(self.edges), strict=True):
-            graph.add_edge(u, v, key=k, **attrs)
+        attrs = _records(self.nodes.drop(columns=self.nodes.geometry.name))
+        for record, geom in zip(attrs, self.nodes.geometry.to_numpy(), strict=True):
+            record["geometry"] = geom
+        graph.add_nodes_from(zip(self.nodes.index, attrs, strict=True))
+        add_edge_records(graph, self.edges)
         return graph
 
 
@@ -72,7 +81,7 @@ def edge_classes(
     unknown = set(tolerances) - set(columns)
     if unknown:
         raise KeyError(f"Tolerances given for columns not in 'columns': {sorted(unknown)}")
-    keys = {}
+    codes = []
     for col in columns:
         series = edges[col]
         tol = tolerances.get(col)
@@ -82,13 +91,10 @@ def edge_classes(
             if not is_numeric(series):
                 raise TypeError(f"Tolerance given for non-numeric column {col!r}.")
             series = series.astype(float).floordiv(tol)
-        keys[col] = (
-            series.astype(object).where(series.notna(), "__missing__").astype(str).to_numpy()
-        )
-    if not keys:
+        codes.append(pd.factorize(series, use_na_sentinel=False)[0])  # missing = own code
+    if not codes:
         return np.zeros(len(edges), dtype=np.int64)
-    frame = pd.DataFrame(keys, index=pd.RangeIndex(len(edges)))
-    return frame.groupby(list(columns), sort=True).ngroup().to_numpy(dtype=np.int64)
+    return np.unique(np.column_stack(codes), axis=0, return_inverse=True)[1].ravel()
 
 
 def coarsen_homogeneous(
@@ -114,131 +120,111 @@ def coarsen_homogeneous(
     if edges.crs is not None and not edges.crs.is_projected:
         raise ValueError("Coarsening needs a projected CRS (lengths, tiles, hulls in metres).")
 
-    u = edges.index.get_level_values("u").to_numpy()
-    v = edges.index.get_level_values("v").to_numpy()
-    geoms = edges.geometry.to_numpy()
-    cls = edge_classes(edges, columns, tolerances)
-
-    start = shapely.get_coordinates(shapely.get_point(geoms, 0))
-    end = shapely.get_coordinates(shapely.get_point(geoms, -1))
-    node_xy = (
-        pd.DataFrame(np.vstack([start, end]), columns=["x", "y"], index=np.concatenate([u, v]))
-        .groupby(level=0)
-        .first()
-    )
-    node_class = _node_class(u, v, cls)
-    if tile_m is not None:
-        cells = np.floor(node_xy[["x", "y"]].to_numpy() / tile_m).astype(np.int64)
-        tile = pd.Series(np.unique(cells, axis=0, return_inverse=True)[1].ravel(), node_xy.index)
-    else:
-        tile = pd.Series(0, index=node_xy.index)
-
-    # Positional node ids (node_xy.index is sorted unique) -> sparse adjacency -> components.
+    # Positional node ids: node_xy.index is the sorted unique node set.
+    node_xy = node_coordinates(edges)
+    xy = node_xy[["x", "y"]].to_numpy()
     n_nodes = len(node_xy)
-    pu, pv = node_xy.index.get_indexer(u), node_xy.index.get_indexer(v)
-    interior = node_class.reindex(node_xy.index).notna().to_numpy()
-    tiles = tile.to_numpy()
-    link = interior[pu] & interior[pv] & (pu != pv) & (tiles[pu] == tiles[pv])
-    adj = coo_array(
-        (np.ones(int(link.sum()), dtype=np.int8), (pu[link], pv[link])), shape=(n_nodes, n_nodes)
-    )
-    _, label = connected_components(adj, directed=False)
-    size = np.bincount(label)
-    grouped = interior & (size[label] >= min_region_nodes)
-    # Regions numbered by their first member's position: deterministic.
-    region_labels, first = np.unique(label[grouped], return_index=True)
-    region_labels = region_labels[np.argsort(np.flatnonzero(grouped)[first])]
-    rank = np.full(len(size), -1)
-    rank[region_labels] = np.arange(len(region_labels))
-    region_of = np.where(grouped, rank[label], -1)
+    pu = node_xy.index.get_indexer(edges.index.get_level_values("u"))
+    pv = node_xy.index.get_indexer(edges.index.get_level_values("v"))
 
-    membership = pd.Series(node_xy.index, index=node_xy.index, dtype=object)
-    region_ids = [f"{REGION_PREFIX}{i}" for i in range(len(region_labels))]
-    membership[grouped] = np.asarray(region_ids, dtype=object)[region_of[grouped]]
-    order = np.argsort(region_of[grouped], kind="stable")
-    bounds = np.cumsum(np.bincount(region_of[grouped], minlength=len(region_ids)))[:-1]
-    regions: list[Any] = (
-        np.split(node_xy.index[grouped].to_numpy()[order], bounds) if region_ids else []
-    )
+    # Interior node: min == max class over incident edges.
+    cls = edge_classes(edges, columns, tolerances)
+    ends, both_cls = np.concatenate([pu, pv]), np.concatenate([cls, cls])
+    lo = np.full(n_nodes, np.iinfo(np.int64).max)
+    hi = np.full(n_nodes, -1)
+    np.minimum.at(lo, ends, both_cls)
+    np.maximum.at(hi, ends, both_cls)
+    interior = lo == hi
 
-    cu, cv = membership.reindex(u).to_numpy(), membership.reindex(v).to_numpy()
-    internal = pd.Series(cu).isin(region_ids).to_numpy() & (cu == cv)
+    link = interior[pu] & interior[pv] & (pu != pv)
+    if tile_m is not None:
+        cell = np.floor(xy / tile_m).astype(np.int64)
+        link &= (cell[pu] == cell[pv]).all(axis=1)
+    label = components(pu[link], pv[link], n_nodes)
+    grouped = interior & (np.bincount(label)[label] >= min_region_nodes)
 
-    nodes = _node_table(edges, columns, node_xy, membership, regions, internal, cu, hull_ratio)
-    kept = edges.loc[~internal].reset_index(drop=True)
-    kept["orig_u"], kept["orig_v"] = u[~internal], v[~internal]
-    kept["orig_key"] = edges.index.get_level_values("key").to_numpy()[~internal]
-    kept["u"], kept["v"] = cu[~internal], cv[~internal]
+    # Region number per node (-1 = unmerged), ordered by first member: deterministic.
+    uniq, first = np.unique(label[grouped], return_index=True)
+    rank = np.full(label.max() + 1, -1)
+    rank[uniq[np.argsort(first)]] = np.arange(uniq.size)
+    region = np.where(grouped, rank[label], -1)
+    region_ids = np.array([f"{REGION_PREFIX}{i}" for i in range(uniq.size)], dtype=object)
+
+    coarse_id = node_xy.index.to_numpy(dtype=object).copy()
+    coarse_id[grouped] = region_ids[region[grouped]]
+    ru = region[pu]
+    internal = (ru >= 0) & (ru == region[pv])
+
+    nodes = _node_table(edges, columns, node_xy, region, region_ids, ru, internal, hull_ratio)
+    kept = edges.loc[~internal].reset_index()
+    kept[["orig_u", "orig_v", "orig_key"]] = kept[list(EDGE_INDEX)]
+    kept["u"], kept["v"] = coarse_id[pu[~internal]], coarse_id[pv[~internal]]
     kept["key"] = kept.groupby(["u", "v"]).cumcount()
     kept = kept.set_index(list(EDGE_INDEX))
-    return CoarseGraph(nodes=nodes, edges=kept, membership=membership.rename("coarse_node"))
-
-
-def _node_class(u: np.ndarray, v: np.ndarray, cls: np.ndarray) -> pd.Series:
-    """Class per node if all incident edges share one class, else NaN (boundary node)."""
-    incident = pd.DataFrame({"n": np.concatenate([u, v]), "c": np.concatenate([cls, cls])})
-    grouped = incident.groupby("n")["c"]
-    first, uniq = grouped.first(), grouped.nunique()
-    return first.where(uniq == 1)
+    membership = pd.Series(coarse_id, index=node_xy.index, name="coarse_node")
+    return CoarseGraph(nodes=nodes, edges=kept, membership=membership)
 
 
 def _node_table(
     edges: gpd.GeoDataFrame,
     columns: Sequence[str],
     node_xy: pd.DataFrame,
-    membership: pd.Series,
-    regions: list[Any],
+    region: np.ndarray,
+    region_ids: np.ndarray,
+    ru: np.ndarray,
     internal: np.ndarray,
-    cu: np.ndarray,
     hull_ratio: float,
 ) -> gpd.GeoDataFrame:
-    plain = membership.index[membership.index == membership.to_numpy()]
-    plain_nodes = pd.DataFrame(
-        {
-            "kind": "node",
-            "x": node_xy.loc[plain, "x"].to_numpy(),
-            "y": node_xy.loc[plain, "y"].to_numpy(),
-            "n_members": 1,
-            "n_internal_edges": 0,
-            "internal_length_m": 0.0,
-            "area_m2": 0.0,
-        },
-        index=pd.Index(plain, dtype=object),
-    )
-    plain_geom = list(shapely.points(plain_nodes[["x", "y"]].to_numpy()))
-    if not regions:
-        return gpd.GeoDataFrame(plain_nodes, geometry=plain_geom, crs=edges.crs).rename_axis("node")
-
-    ids = np.array([f"{REGION_PREFIX}{i}" for i in range(len(regions))], dtype=object)
-    pos = pd.Series(np.arange(len(ids)), index=ids)
-    e_region = pos.reindex(cu[internal]).to_numpy()
+    xy = node_xy[["x", "y"]].to_numpy()
+    plain = region < 0
+    n_reg = region_ids.size
+    e_region = ru[internal]
     lengths = edges.geometry.length.to_numpy()[internal]
-    geoms = edges.geometry.to_numpy()[internal]
 
-    hulls, anchors = [], []
-    for i, members in enumerate(regions):
-        hull = shapely.concave_hull(
-            shapely.multilinestrings(list(geoms[e_region == i])), hull_ratio
+    # Hulls: one multilinestring per region via shapely's indices= (no per-region loop).
+    by_reg = np.argsort(e_region, kind="stable")  # shapely requires sorted indices
+    multi = shapely.multilinestrings(
+        edges.geometry.to_numpy()[internal][by_reg], indices=e_region[by_reg]
+    )
+    hulls = shapely.concave_hull(multi, hull_ratio) if n_reg else np.empty(0, dtype=object)
+
+    # Anchor: member node nearest its region centroid (lexsort, first per region).
+    members = np.flatnonzero(~plain)
+    m_reg = region[members]
+    count = np.bincount(m_reg, minlength=n_reg)
+    centroid = (
+        np.column_stack(
+            [np.bincount(m_reg, weights=xy[members, d], minlength=n_reg) for d in (0, 1)]
         )
-        hulls.append(hull)
-        xy = node_xy.loc[members, ["x", "y"]].to_numpy()
-        anchors.append(xy[np.argmin(((xy - xy.mean(axis=0)) ** 2).sum(axis=1))])
-    anchor = np.asarray(anchors)
+        / np.maximum(count, 1)[:, None]
+    )
+    dist = ((xy[members] - centroid[m_reg]) ** 2).sum(axis=1)
+    order = np.lexsort((dist, m_reg))
+    _, first = np.unique(m_reg[order], return_index=True)
+    anchor = xy[members[order[first]]] if n_reg else np.empty((0, 2))
+
     table = pd.DataFrame(
         {
-            "kind": "region",
-            "x": anchor[:, 0],
-            "y": anchor[:, 1],
-            "n_members": [len(m) for m in regions],
-            "n_internal_edges": np.bincount(e_region, minlength=len(ids)),
-            "internal_length_m": np.bincount(e_region, weights=lengths, minlength=len(ids)),
-            "area_m2": shapely.area(np.asarray(hulls)),
+            "kind": np.r_[np.full(plain.sum(), "node"), np.full(n_reg, "region")],
+            "x": np.r_[xy[plain, 0], anchor[:, 0]],
+            "y": np.r_[xy[plain, 1], anchor[:, 1]],
+            "n_members": np.r_[np.ones(plain.sum(), dtype=np.int64), count],
+            "n_internal_edges": np.r_[
+                np.zeros(plain.sum(), dtype=np.int64), np.bincount(e_region, minlength=n_reg)
+            ],
+            "internal_length_m": np.r_[
+                np.zeros(plain.sum()), np.bincount(e_region, weights=lengths, minlength=n_reg)
+            ],
+            "area_m2": np.r_[np.zeros(plain.sum()), shapely.area(hulls)],
         },
-        index=pd.Index(ids, dtype=object),
+        index=pd.Index(
+            np.r_[node_xy.index.to_numpy(dtype=object)[plain], region_ids], dtype=object
+        ),
     )
     sub = edges.iloc[np.flatnonzero(internal)]
     for col in columns:
         agg = weighted_mean if is_numeric(sub[col]) else weighted_majority
-        table[col] = agg(e_region, sub[col], lengths).rename(index=dict(enumerate(ids)))
-    out = pd.concat([plain_nodes, table])
-    return gpd.GeoDataFrame(out, geometry=plain_geom + hulls, crs=edges.crs).rename_axis("node")
+        by_region = agg(e_region, sub[col], lengths).reindex(range(n_reg))
+        table[col] = pd.Series(by_region.to_numpy(), index=region_ids)
+    geometry = np.r_[shapely.points(xy[plain]), hulls]
+    return gpd.GeoDataFrame(table, geometry=geometry, crs=edges.crs).rename_axis("node")

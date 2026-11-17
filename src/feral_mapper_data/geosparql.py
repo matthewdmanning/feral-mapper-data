@@ -19,7 +19,6 @@ Modelling:
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -67,18 +66,15 @@ def to_geosparql(
     def node_iri(nid: Any) -> URIRef:
         return URIRef(f"{base_iri}node/{nid}")
 
-    def literal(value: Any) -> Literal | None:
-        if value is None or (isinstance(value, float) and math.isnan(value)):
-            return None
-        if isinstance(value, np.generic):
-            value = value.item()
-        if isinstance(value, bool):
-            return Literal(value, datatype=XSD.boolean)
-        if isinstance(value, int):
-            return Literal(value, datatype=XSD.integer)
-        if isinstance(value, float):
-            return Literal(value, datatype=XSD.double)
-        return Literal(str(value))
+    def datatype(series: pd.Series) -> Any:
+        """xsd type chosen once per column from its dtype (None -> plain string)."""
+        if pd.api.types.is_bool_dtype(series):
+            return XSD.boolean
+        if pd.api.types.is_integer_dtype(series):
+            return XSD.integer
+        if pd.api.types.is_float_dtype(series):
+            return XSD.double
+        return None
 
     def add_features(
         frame: gpd.GeoDataFrame, iris: list[URIRef], kinds: list[URIRef], skip: set[str]
@@ -87,8 +83,6 @@ def to_geosparql(
         metric_len = frame.geometry.length.to_numpy()
         metric_area = frame.geometry.area.to_numpy()
         attrs = frame.drop(columns=[frame.geometry.name, *skip], errors="ignore")
-        names = [fm[_local(str(c))] for c in attrs.columns]
-        rows = attrs.to_numpy(dtype=object)  # one conversion; no per-row Series
         for i, (iri, kind) in enumerate(zip(iris, kinds, strict=True)):
             geom = URIRef(f"{iri}/geometry")
             graph.add((iri, RDF.type, GEO.Feature))
@@ -105,10 +99,15 @@ def to_geosparql(
                 graph.add(
                     (iri, GEO.hasMetricLength, Literal(float(metric_len[i]), datatype=XSD.double))
                 )
-            for pred, value in zip(names, rows[i], strict=True):
-                lit = literal(value)
-                if lit is not None:
-                    graph.add((iri, pred, lit))
+        # Attributes column by column: one dtype decision and one NaN mask per column.
+        iri_arr = np.asarray(iris, dtype=object)
+        for col in attrs.columns:
+            pred, series, dt = fm[_local(str(col))], attrs[col], datatype(attrs[col])
+            mask = series.notna().to_numpy()
+            values = series.to_numpy()[mask].tolist()  # numpy scalars -> Python
+            for iri, value in zip(iri_arr[mask], values, strict=True):
+                lit = Literal(value, datatype=dt) if dt is not None else Literal(str(value))
+                graph.add((iri, pred, lit))
 
     if edges is not None:
         _check_index(edges)
