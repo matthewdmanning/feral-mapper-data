@@ -1,14 +1,16 @@
 """Satellite vegetation / foliage rasters (e.g. NDVI, canopy cover) onto edges.
 
 Stats are taken over a flat-capped ``buffer_m`` corridor alongside each edge (no bleed
-past the edge ends into neighbouring edges). Corridors are reprojected
-to the raster CRS (vector reprojection), so source pixels are never resampled.
-A pixel counts when its center falls in the corridor (``all_touched=False``).
+past the edge ends into neighbouring edges). Corridors are reprojected to the raster CRS
+(vector reprojection), so source pixels are never resampled.
+
+Extraction: exactextract (C++, raster-sequential): one pass over raster blocks, exact
+fraction of each cell covered by each corridor. Stats are coverage-weighted; with
+``all_touched`` every touched cell has weight 1.
 """
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -16,8 +18,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.features import geometry_mask
-from rasterio.windows import Window
+from exactextract import exact_extract
+from exactextract.raster import RasterioRasterSource
+
+from feral_mapper_data._util import corridors
 
 SUPPORTED_STATS = ("mean", "std", "min", "max", "median", "count")
 
@@ -38,45 +42,78 @@ def raster_corridor_stats(
     """Corridor statistics per edge plus ``{prefix}valid_fraction``.
 
     Values are ``raw * scale + offset`` (e.g. MODIS NDVI: scale=0.0001). Nodata and values
-    outside ``valid_range`` (after scaling) are excluded. Stats are NaN with no valid pixels.
+    outside ``valid_range`` (after scaling) are excluded. Stats are NaN with no valid cells.
+    ``count`` is the covered cell count (fractional). ``valid_fraction`` is the share of the
+    corridor area covered by valid cells (area off the raster counts as invalid).
     """
     bad = set(stats) - set(SUPPORTED_STATS)
     if bad:
         raise ValueError(f"Unsupported stats {sorted(bad)}; choose from {SUPPORTED_STATS}.")
-    if buffer_m <= 0:
-        raise ValueError("buffer_m must be positive.")
-    corridors = edges.geometry.buffer(buffer_m, cap_style="flat")
-    results = np.full((len(edges), len(stats) + 1), np.nan)
+    n = len(edges)
+    zones = gpd.GeoSeries(corridors(edges.geometry.to_numpy(), buffer_m), crs=edges.crs)
 
     with rasterio.open(raster_path) as src:
         if src.crs is None:
             raise ValueError(f"Raster {raster_path} has no CRS.")
-        corridors = corridors.to_crs(src.crs)
-        for i, geom in enumerate(corridors.to_numpy()):
-            window = _window(src, geom.bounds)
-            if window is None:
-                continue
-            data = src.read(band, window=window, masked=True)
-            inside = geometry_mask(
-                [geom],
-                out_shape=data.shape,
-                transform=src.window_transform(window),
-                invert=True,
-                all_touched=all_touched,
-            )
-            n_inside = int(inside.sum())
-            if n_inside == 0:
-                continue
-            values = data.data[inside & ~np.ma.getmaskarray(data)].astype(float) * scale + offset
-            values = values[np.isfinite(values)]
-            if valid_range is not None:
-                values = values[(values >= valid_range[0]) & (values <= valid_range[1])]
-            results[i, -1] = values.size / n_inside
-            if values.size:
-                results[i, :-1] = [_stat(s, values) for s in stats]
+        vec = gpd.GeoDataFrame(geometry=zones.to_crs(src.crs))
+        cell_area = abs(src.transform.a * src.transform.e - src.transform.b * src.transform.d)
+        extracted = exact_extract(
+            RasterioRasterSource(src, band),
+            vec,
+            ["values", "coverage"],
+            output="pandas",
+            strategy="raster-sequential",
+        )
 
-    columns = [f"{prefix}{s}" for s in stats] + [f"{prefix}valid_fraction"]
-    return pd.DataFrame(results, index=edges.index, columns=columns)
+    sizes = extracted["values"].map(len).to_numpy()
+    feat = np.repeat(np.arange(n), sizes)
+    vals = np.concatenate([*extracted["values"], np.empty(0)]) * scale + offset
+    cov = np.concatenate([*extracted["coverage"], np.empty(0)])
+    ok = np.isfinite(vals) & (cov > 0)
+    if valid_range is not None:
+        ok &= (vals >= valid_range[0]) & (vals <= valid_range[1])
+    feat, vals, cov = feat[ok], vals[ok], cov[ok]
+    w = np.ones_like(cov) if all_touched else cov
+
+    sw = np.bincount(feat, weights=w, minlength=n)
+    has = sw > 0
+    mean = np.divide(
+        np.bincount(feat, weights=w * vals, minlength=n), sw, where=has, out=np.full(n, np.nan)
+    )
+    columns: dict[str, np.ndarray] = {}
+    for stat in stats:
+        if stat == "mean":
+            columns[stat] = mean
+        elif stat == "std":
+            dev = np.bincount(feat, weights=w * (vals - mean[feat]) ** 2, minlength=n)
+            columns[stat] = np.sqrt(np.divide(dev, sw, where=has, out=np.full(n, np.nan)))
+        elif stat == "count":
+            columns[stat] = np.where(has, sw, np.nan)
+        elif stat in ("min", "max"):
+            grouped = pd.Series(vals).groupby(feat).agg(stat)
+            columns[stat] = grouped.reindex(range(n)).to_numpy()
+        else:
+            columns[stat] = _weighted_median(feat, vals, w, n)
+    area = vec.geometry.area.to_numpy()
+    covered = np.bincount(feat, weights=cov, minlength=n) * cell_area
+    valid = np.clip(np.divide(covered, area, where=area > 0, out=np.zeros(n)), 0.0, 1.0)
+    out = pd.DataFrame({f"{prefix}{k}": v for k, v in columns.items()}, index=edges.index)
+    out[f"{prefix}valid_fraction"] = valid
+    return out
+
+
+def _weighted_median(feat: np.ndarray, vals: np.ndarray, w: np.ndarray, n: int) -> np.ndarray:
+    """Per-group weighted median (lower median), vectorised via one lexsort."""
+    out = np.full(n, np.nan)
+    if feat.size == 0:
+        return out
+    order = np.lexsort((vals, feat))
+    f, v, ww = feat[order], vals[order], w[order]
+    within = pd.Series(ww).groupby(f).cumsum().to_numpy()  # cumulative weight per group
+    hit = np.flatnonzero(within >= np.bincount(f, weights=ww, minlength=n)[f] / 2 - 1e-12)
+    first = np.r_[True, f[hit][1:] != f[hit][:-1]]  # first crossing per group
+    out[f[hit][first]] = v[hit][first]
+    return out
 
 
 def write_ndvi(src_path: str | Path, out_path: str | Path, *, red_band: int, nir_band: int) -> Path:
@@ -94,21 +131,3 @@ def write_ndvi(src_path: str | Path, out_path: str | Path, *, red_band: int, nir
                     ndvi = np.ma.where(denom == 0, np.ma.masked, (nir - red) / denom)
                 dst.write(np.ma.filled(ndvi, np.nan).astype("float32"), 1, window=window)
     return out_path
-
-
-def _window(src: rasterio.DatasetReader, bounds: tuple[float, ...]) -> Window | None:
-    """Pixel window covering ``bounds``, clipped to the raster; None if disjoint."""
-    inv = ~src.transform
-    xs, ys = (bounds[0], bounds[2]), (bounds[1], bounds[3])
-    cols, rows = zip(*(inv @ (x, y) for x in xs for y in ys), strict=True)
-    c0, c1 = max(0, math.floor(min(cols))), min(src.width, math.ceil(max(cols)))
-    r0, r1 = max(0, math.floor(min(rows))), min(src.height, math.ceil(max(rows)))
-    if c1 <= c0 or r1 <= r0:
-        return None
-    return Window(c0, r0, c1 - c0, r1 - r0)
-
-
-def _stat(name: str, values: np.ndarray) -> float:
-    if name == "count":
-        return float(values.size)
-    return float(getattr(np, name)(values))

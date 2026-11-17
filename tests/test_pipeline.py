@@ -118,3 +118,44 @@ def test_cli_config_error_exit_code(tmp_path, capsys):
     path.write_text("[network]\n")
     assert main([str(path)]) == 2
     assert "config error" in capsys.readouterr().err
+
+
+def test_pipeline_coarsen_and_geosparql(workspace):
+    pytest.importorskip("rdflib")
+    cfg = CONFIG + textwrap.dedent(
+        """
+        coarse_nodes = "out/coarse_nodes.parquet"
+        coarse_edges = "out/coarse_edges.parquet"
+        coarse_graphml = "out/coarse.graphml"
+        geosparql = "out/network.ttl"
+
+        [coarsen]
+        columns = ["lc_majority"]
+        min_region_nodes = 2
+        """
+    )
+    (workspace / "config.toml").write_text(cfg)
+    assert main([str(workspace / "config.toml")]) == 0
+    nodes = gpd.read_parquet(workspace / "out/coarse_nodes.parquet")
+    assert {"kind", "n_members", "members"} <= set(nodes.columns)
+    assert list(nodes["kind"]) == ["region"]  # all edges are park: one region absorbs them
+    assert len(gpd.read_parquet(workspace / "out/coarse_edges.parquet")) == 0
+    assert nx.read_graphml(workspace / "out/coarse.graphml").number_of_nodes() == len(nodes)
+    assert (workspace / "out/network.ttl").stat().st_size > 0
+
+
+@pytest.mark.parametrize(
+    ("extra", "match"),
+    [
+        ('[coarsen]\ncolumns=["a"]\n', "coarse_nodes"),
+        ('[output]\nedges="e"\ncoarse_nodes="n"\n', "coarsen"),
+        ('[output]\nedges="e"\ngeosparql_crs="utm"\n', "geosparql_crs"),
+    ],
+)
+def test_coarsen_config_validation(tmp_path, extra, match):
+    base = '[network]\npath="a"\n'
+    toml = base + (extra if extra.startswith("[output]") else '[output]\nedges="e"\n' + extra)
+    path = tmp_path / "c.toml"
+    path.write_text(toml)
+    with pytest.raises(ConfigError, match=match):
+        PipelineConfig.from_toml(path)

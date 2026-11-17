@@ -39,6 +39,17 @@ path = "../data/raw/census_blocks.gpkg"
 value_columns = ["housing_density", "population_density"]
 prefix = "census_"
 
+[coarsen]                             # collapse large homogeneous areas into region nodes
+columns = ["lc_majority", "ndvi_mean", "road_func_class"]
+tolerances = { ndvi_mean = 0.1 }      # numeric bin width; omitted columns must match exactly
+min_region_nodes = 5                  # smaller homogeneous patches keep full detail
+tile_m = 1000                         # regions never span >1 km grid cell (bounds detail loss)
+
 [output]
-edges = "../data/processed/edges.parquet"   # GeoParquet
+edges = "../data/processed/edges.parquet"   # GeoParquet 1.1 (bbox covering column)
 graphml = "../data/processed/graph.graphml"
+coarse_nodes = "../data/processed/coarse_nodes.parquet"
+coarse_edges = "../data/processed/coarse_edges.parquet"
+coarse_graphml = "../data/processed/coarse.graphml"
+geosparql = "../data/processed/network.ttl"   # needs [rdf] extra; .ttl/.nt/.jsonld/.rdf
+# geosparql_crs = "native"           # default crs84 (lon/lat, portable across triplestores)

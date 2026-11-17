@@ -1,11 +1,12 @@
 [project]
 name = "feral-mapper-data"
 version = "0.1.0"
-description = "Data backend for feral cat population models: converts geospatial layers onto road-graph edges."
+description = "Data backend for feral cat population models: geospatial layers onto road-graph edges, homogeneous-area coarsening, GeoSPARQL export."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "affine>=2.4",
+    "exactextract>=0.3",
     "geopandas>=1.0",
     "networkx>=3.3",
     "numpy>=1.26",
@@ -13,11 +14,13 @@ dependencies = [
     "pyarrow>=16",
     "pyproj>=3.6",
     "rasterio>=1.4",
+    "scipy>=1.13",
     "shapely>=2.0",
 ]
 
 [project.optional-dependencies]
 osm = ["osmnx>=2.0"]
+rdf = ["rdflib>=7.1"]
 
 [project.scripts]
 feral-edges = "feral_mapper_data.cli:main"

@@ -1,5 +1,6 @@
 import geopandas as gpd
 import networkx as nx
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -70,3 +71,19 @@ def test_edges_from_graph_builds_missing_geometry():
     out = edges_from_graph(g)
     assert out.geometry.iloc[0].length == pytest.approx(5.0)
     assert out["speed"].iloc[0] == 30
+
+
+def test_snapping_has_no_grid_border_artifacts():
+    # 0.24 and 0.26 round to different 0.5 m grid cells but are 0.02 m apart
+    lines = gpd.GeoDataFrame(
+        geometry=[line((0, 0), (10.24, 0)), line((10.26, 0), (20, 0))], crs=CRS
+    )
+    out = edges_from_lines(lines, node_tolerance=0.5)
+    assert out.index[0][1] == out.index[1][0]
+
+
+def test_cluster_points_is_transitive():
+    from feral_mapper_data.graph import cluster_points
+
+    labels = cluster_points(np.array([[0.0, 0], [0.4, 0], [0.8, 0], [5.0, 0]]), 0.5)
+    assert labels[0] == labels[1] == labels[2] != labels[3]

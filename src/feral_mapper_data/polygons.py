@@ -15,6 +15,7 @@ import shapely
 
 from feral_mapper_data._util import (
     clean_geometries,
+    corridors,
     require_columns,
     slug,
     to_edge_frame,
@@ -41,8 +42,6 @@ def polygon_attributes(
     """
     if category_column is None and not value_columns:
         raise ValueError("Provide category_column and/or value_columns.")
-    if buffer_m is not None and buffer_m <= 0:
-        raise ValueError("buffer_m must be positive.")
     cols = [c for c in (category_column, *value_columns) if c is not None]
     require_columns(polygons, cols, "polygon")
     polygons = clean_geometries(
@@ -55,14 +54,20 @@ def polygon_attributes(
     targets = edges.geometry.to_numpy()
     measure = shapely.length
     if buffer_m is not None:
-        targets = shapely.buffer(targets, buffer_m, cap_style="flat")
+        targets = corridors(targets, buffer_m)
         measure = shapely.area
 
+    shapely.prepare(poly_geoms)  # segment index: fast repeated predicates on big polygons
     edge_i, poly_i = shapely.STRtree(poly_geoms).query(targets, predicate="intersects")
-    amount = measure(shapely.intersection(targets[edge_i], poly_geoms[poly_i]))
+    # Large homogeneous polygons contain most targets outright: their overlap is the whole
+    # target, so the costly overlay runs only on boundary-crossing pairs.
+    inside = shapely.contains_properly(poly_geoms[poly_i], targets[edge_i])
+    total = measure(targets)
+    amount = total[edge_i].copy()
+    cross = ~inside
+    amount[cross] = measure(shapely.intersection(targets[edge_i[cross]], poly_geoms[poly_i[cross]]))
     keep = amount > 0
     edge_i, poly_i, amount = edge_i[keep], poly_i[keep], amount[keep]
-    total = measure(targets)
 
     by_pos: dict[str, pd.Series] = {}
     frac_cols: list[str] = []

@@ -18,6 +18,7 @@ import shapely
 
 from feral_mapper_data._util import (
     clean_geometries,
+    corridors,
     is_numeric,
     require_columns,
     to_edge_frame,
@@ -46,8 +47,6 @@ def conflate_lines(
     ``{prefix}coverage`` (matched fraction of edge length, 0-1). Attributes are NaN where
     coverage < ``min_coverage``. Default aggregation: weighted_mean (numeric), majority.
     """
-    if buffer_m <= 0:
-        raise ValueError("buffer_m must be positive.")
     require_columns(source, columns, name)
     aggregations = dict(aggregations or {})
     unknown = set(aggregations) - set(columns)
@@ -56,11 +55,11 @@ def conflate_lines(
 
     source = clean_geometries(align_crs(source, edges, name)[[*columns, source.geometry.name]])
     edge_geoms = edges.geometry.to_numpy()
-    corridors = shapely.buffer(edge_geoms, buffer_m, cap_style="flat")
+    zones = corridors(edge_geoms, buffer_m)
     src_geoms = source.geometry.to_numpy()
 
-    src_i, edge_i = shapely.STRtree(corridors).query(src_geoms, predicate="intersects")
-    clipped = shapely.intersection(src_geoms[src_i], corridors[edge_i])
+    src_i, edge_i = shapely.STRtree(zones).query(src_geoms, predicate="intersects")
+    clipped = shapely.intersection(src_geoms[src_i], zones[edge_i])
     weights = _spanned_length(clipped, edge_geoms[edge_i])
     keep = weights > 1e-6
     src_i, edge_i, weights = src_i[keep], edge_i[keep], weights[keep]

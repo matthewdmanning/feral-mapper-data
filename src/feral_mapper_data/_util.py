@@ -8,6 +8,9 @@ from collections.abc import Iterable
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
+from scipy.sparse import coo_array
+from scipy.sparse.csgraph import connected_components
 
 
 def require_columns(df: pd.DataFrame, columns: Iterable[str], name: str) -> None:
@@ -63,3 +66,16 @@ def to_edge_frame(edges: gpd.GeoDataFrame, by_pos: dict[str, pd.Series]) -> pd.D
         out[col] = series.reindex(out.index)
     out.index = edges.index
     return out
+
+
+def corridors(geoms: np.ndarray, buffer_m: float) -> np.ndarray:
+    """Flat-capped corridors: stop at line ends, so values never bleed into neighbours."""
+    if buffer_m <= 0:
+        raise ValueError("buffer_m must be positive.")
+    return shapely.buffer(geoms, buffer_m, cap_style="flat")
+
+
+def components(a: np.ndarray, b: np.ndarray, n: int) -> np.ndarray:
+    """Connected-component label per vertex ``0..n-1`` for undirected pairs ``(a, b)``."""
+    adj = coo_array((np.ones(a.size, dtype=np.int8), (a, b)), shape=(n, n))
+    return connected_components(adj, directed=False)[1]
