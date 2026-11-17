@@ -8,6 +8,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
+from feral_mapper_data.coarsen import CoarseGraph, coarsen_homogeneous
 from feral_mapper_data.config import PipelineConfig
 from feral_mapper_data.crs import ensure_projected
 from feral_mapper_data.graph import (
@@ -112,7 +113,50 @@ def run(config: PipelineConfig) -> gpd.GeoDataFrame:
     log.info("Wrote %s", config.output.edges)
     if config.output.graphml is not None:
         _write_graph(config, result, attrs, config.output.graphml)
+    coarse = _coarsen(config, result)
+    if config.output.geosparql is not None:
+        from feral_mapper_data.geosparql import to_geosparql, write_geosparql
+
+        crs = config.output.geosparql_crs
+        if coarse is not None:
+            rdf = to_geosparql(coarse.edges, coarse.nodes, coarse.membership, wkt_crs=crs)  # type: ignore[arg-type]
+        else:
+            rdf = to_geosparql(result, wkt_crs=crs)  # type: ignore[arg-type]
+        write_geosparql(rdf, config.output.geosparql)
+        log.info("Wrote %s (%d triples)", config.output.geosparql, len(rdf))
     return result
+
+
+def _coarsen(config: PipelineConfig, result: gpd.GeoDataFrame) -> CoarseGraph | None:
+    if (cc := config.coarsen) is None:
+        return None
+    coarse = coarsen_homogeneous(
+        result,
+        cc.columns,
+        tolerances=cc.tolerances,
+        min_region_nodes=cc.min_region_nodes,
+        tile_m=cc.tile_m,
+        hull_ratio=cc.hull_ratio,
+    )
+    n_in = len(coarse.membership)
+    log.info("Coarsened %d nodes -> %d (%d edges kept)", n_in, len(coarse.nodes), len(coarse.edges))
+    out = config.output
+    if out.coarse_nodes is not None:
+        nodes = coarse.nodes.assign(
+            members=coarse.membership.groupby(coarse.membership)
+            .apply(list)
+            .reindex(coarse.nodes.index)
+        )
+        nodes.index = nodes.index.astype(str)
+        write_vector(nodes, out.coarse_nodes)
+    if out.coarse_edges is not None:
+        edges = coarse.edges.reset_index()
+        for col in ("u", "v"):
+            edges[col] = edges[col].astype(str)
+        write_vector(edges, out.coarse_edges)
+    if out.coarse_graphml is not None:
+        write_graphml(coarse.to_networkx(), out.coarse_graphml)
+    return coarse
 
 
 def _write_graph(

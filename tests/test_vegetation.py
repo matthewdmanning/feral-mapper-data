@@ -114,3 +114,24 @@ def test_write_ndvi(tmp_path):
         arr = ds.read(1)
     assert arr[1, 1] == pytest.approx(0.5)
     assert np.isnan(arr[0, 0])
+
+
+def test_median_min_max_and_all_touched(edges, ndvi):
+    out = raster_corridor_stats(edges, ndvi, buffer_m=15, stats=("median", "min", "max", "count"))
+    touched = raster_corridor_stats(edges, ndvi, buffer_m=15, stats=("count",), all_touched=True)
+    w = by_name(edges, "main_w")
+    assert out.loc[w, "ndvi_median"] == pytest.approx(0.2, abs=1e-6)
+    assert out.loc[w, "ndvi_min"] == pytest.approx(0.2, abs=1e-6)
+    assert out.loc[w, "ndvi_max"] == pytest.approx(0.2, abs=1e-6)
+    assert out.loc[w, "ndvi_count"] == pytest.approx(30.0)  # 100 m x 30 m / 100 m2 cells
+    assert touched.loc[w, "ndvi_count"] >= out.loc[w, "ndvi_count"]
+
+
+def test_weighted_median():
+    from feral_mapper_data.vegetation import _weighted_median
+
+    feat = np.array([0, 0, 0, 2, 2])
+    vals = np.array([3.0, 1.0, 2.0, 9.0, 5.0])
+    w = np.array([1.0, 1.0, 5.0, 1.0, 3.0])
+    med = _weighted_median(feat, vals, w, 3)
+    assert med[0] == 2.0 and np.isnan(med[1]) and med[2] == 5.0

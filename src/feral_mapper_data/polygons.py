@@ -58,11 +58,17 @@ def polygon_attributes(
         targets = shapely.buffer(targets, buffer_m, cap_style="flat")
         measure = shapely.area
 
+    shapely.prepare(poly_geoms)  # segment index: fast repeated predicates on big polygons
     edge_i, poly_i = shapely.STRtree(poly_geoms).query(targets, predicate="intersects")
-    amount = measure(shapely.intersection(targets[edge_i], poly_geoms[poly_i]))
+    # Large homogeneous polygons contain most targets outright: their overlap is the whole
+    # target, so the costly overlay runs only on boundary-crossing pairs.
+    inside = shapely.contains_properly(poly_geoms[poly_i], targets[edge_i])
+    total = measure(targets)
+    amount = total[edge_i].copy()
+    cross = ~inside
+    amount[cross] = measure(shapely.intersection(targets[edge_i[cross]], poly_geoms[poly_i[cross]]))
     keep = amount > 0
     edge_i, poly_i, amount = edge_i[keep], poly_i[keep], amount[keep]
-    total = measure(targets)
 
     by_pos: dict[str, pd.Series] = {}
     frac_cols: list[str] = []

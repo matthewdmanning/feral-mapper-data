@@ -74,9 +74,23 @@ class PolygonConfig:
 
 
 @dataclass(frozen=True)
+class CoarsenConfig:
+    columns: list[str]
+    tolerances: dict[str, float] = field(default_factory=dict)
+    min_region_nodes: int = 3
+    tile_m: float | None = None
+    hull_ratio: float = 0.3
+
+
+@dataclass(frozen=True)
 class OutputConfig:
     edges: Path
     graphml: Path | None = None
+    coarse_nodes: Path | None = None
+    coarse_edges: Path | None = None
+    coarse_graphml: Path | None = None
+    geosparql: Path | None = None
+    geosparql_crs: str = "crs84"
 
 
 @dataclass(frozen=True)
@@ -87,6 +101,7 @@ class PipelineConfig:
     traffic: TrafficConfig | None = None
     vegetation: list[VegetationConfig] = field(default_factory=list)
     polygons: list[PolygonConfig] = field(default_factory=list)
+    coarsen: CoarsenConfig | None = None
 
     @classmethod
     def from_toml(cls, path: str | Path) -> PipelineConfig:
@@ -114,9 +129,21 @@ class PipelineConfig:
         traffic = one(TrafficConfig, "traffic")
         if traffic is not None and traffic.segments is None and traffic.stations is None:
             raise ConfigError("[traffic] needs 'segments' and/or 'stations'.")
+        output = _build(OutputConfig, raw["output"], "output", base_dir)
+        coarsen = one(CoarsenConfig, "coarsen")
+        coarse_outputs = (output.coarse_nodes, output.coarse_edges, output.coarse_graphml)
+        if coarsen is not None and all(p is None for p in coarse_outputs):
+            raise ConfigError(
+                "[coarsen] needs an [output] coarse_nodes/coarse_edges/coarse_graphml."
+            )
+        if coarsen is None and any(p is not None for p in coarse_outputs):
+            raise ConfigError("[output] coarse_* paths need a [coarsen] section.")
+        if output.geosparql_crs not in ("crs84", "native"):
+            raise ConfigError("[output] geosparql_crs must be 'crs84' or 'native'.")
         return cls(
             network=_build(NetworkConfig, raw["network"], "network", base_dir),
-            output=_build(OutputConfig, raw["output"], "output", base_dir),
+            output=output,
+            coarsen=coarsen,
             roadway=one(RoadwayConfig, "roadway"),
             traffic=traffic,
             vegetation=many(VegetationConfig, "vegetation"),
@@ -124,7 +151,17 @@ class PipelineConfig:
         )
 
 
-_PATH_KEYS = {"path", "segments", "stations", "edges", "graphml"}
+_PATH_KEYS = {
+    "path",
+    "segments",
+    "stations",
+    "edges",
+    "graphml",
+    "coarse_nodes",
+    "coarse_edges",
+    "coarse_graphml",
+    "geosparql",
+}
 
 
 def _reject_unknown(kind: type, raw: dict[str, Any], where: str) -> None:
