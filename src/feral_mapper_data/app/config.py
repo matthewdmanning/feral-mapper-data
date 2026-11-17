@@ -6,38 +6,57 @@ Relative paths resolve against the config file's directory.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, Self
 
-T = TypeVar("T")
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+
+from feral_mapper_data.attributes._conflate import Aggregation
+from feral_mapper_data.attributes.vegetation import Stat
 
 
 class ConfigError(ValueError):
     """Invalid pipeline configuration."""
 
 
-@dataclass(frozen=True)
-class NetworkConfig:
+class _Section(BaseModel):
+    """Frozen table that rejects unknown keys and resolves paths against ``base_dir``."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def _resolve_path(cls, value: object, info: ValidationInfo) -> object:
+        base_dir = (info.context or {}).get("base_dir", Path())
+        return base_dir / value if isinstance(value, Path) else value
+
+
+class NetworkConfig(_Section):
     path: Path
     layer: str | None = None
     crs: str | None = None
     node_tolerance: float = 0.5
 
 
-@dataclass(frozen=True)
-class RoadwayConfig:
+class RoadwayConfig(_Section):
     path: Path
     columns: list[str]
     layer: str | None = None
     buffer_m: float = 10.0
     min_coverage: float = 0.5
-    aggregations: dict[str, str] = field(default_factory=dict)
+    aggregations: dict[str, Aggregation] = Field(default_factory=dict)
     prefix: str = "road_"
 
 
-@dataclass(frozen=True)
-class TrafficConfig:
+class TrafficConfig(_Section):
     segments: Path | None = None
     segments_layer: str | None = None
     segment_column: str = "aadt"
@@ -49,59 +68,72 @@ class TrafficConfig:
     max_station_distance_m: float = 30.0
     prefix: str = ""
 
+    @model_validator(mode="after")
+    def _needs_a_source(self) -> Self:
+        if self.segments is None and self.stations is None:
+            raise ValueError("[traffic] needs 'segments' and/or 'stations'.")
+        return self
 
-@dataclass(frozen=True)
-class VegetationConfig:
+
+class VegetationConfig(_Section):
     path: Path
     prefix: str = "ndvi_"
     buffer_m: float = 30.0
     band: int = 1
-    stats: list[str] = field(default_factory=lambda: ["mean", "std"])
+    stats: list[Stat] = Field(default=["mean", "std"])  # pydantic copies defaults
     scale: float = 1.0
     offset: float = 0.0
-    valid_range: list[float] | None = None
+    valid_range: tuple[float, float] | None = None
     all_touched: bool = False
 
 
-@dataclass(frozen=True)
-class PolygonConfig:
+class PolygonConfig(_Section):
     path: Path
     prefix: str
     layer: str | None = None
     category_column: str | None = None
-    value_columns: list[str] = field(default_factory=list)
+    value_columns: list[str] = Field(default_factory=list)
     buffer_m: float | None = None
 
 
-@dataclass(frozen=True)
-class CoarsenConfig:
+class CoarsenConfig(_Section):
     columns: list[str]
-    tolerances: dict[str, float] = field(default_factory=dict)
+    tolerances: dict[str, float] = Field(default_factory=dict)
     min_region_nodes: int = 3
     tile_m: float | None = None
     hull_ratio: float = 0.3
 
 
-@dataclass(frozen=True)
-class OutputConfig:
+class OutputConfig(_Section):
     edges: Path
     graphml: Path | None = None
     coarse_nodes: Path | None = None
     coarse_edges: Path | None = None
     coarse_graphml: Path | None = None
     geosparql: Path | None = None
-    geosparql_crs: str = "crs84"
+    geosparql_crs: Literal["crs84", "native"] = "crs84"
 
 
-@dataclass(frozen=True)
-class PipelineConfig:
+class PipelineConfig(_Section):
     network: NetworkConfig
     output: OutputConfig
     roadway: RoadwayConfig | None = None
     traffic: TrafficConfig | None = None
-    vegetation: list[VegetationConfig] = field(default_factory=list)
-    polygons: list[PolygonConfig] = field(default_factory=list)
+    vegetation: list[VegetationConfig] = Field(default_factory=list)
+    polygons: list[PolygonConfig] = Field(default_factory=list)
     coarsen: CoarsenConfig | None = None
+
+    @model_validator(mode="after")
+    def _coarsen_matches_outputs(self) -> Self:
+        out = self.output
+        has_outputs = any((out.coarse_nodes, out.coarse_edges, out.coarse_graphml))
+        if self.coarsen is not None and not has_outputs:
+            raise ValueError(
+                "[coarsen] needs an [output] coarse_nodes/coarse_edges/coarse_graphml."
+            )
+        if self.coarsen is None and has_outputs:
+            raise ValueError("[output] coarse_* paths need a [coarsen] section.")
+        return self
 
     @classmethod
     def from_toml(cls, path: str | Path) -> PipelineConfig:
@@ -112,72 +144,7 @@ class PipelineConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], base_dir: Path = Path()) -> PipelineConfig:
-        _reject_unknown(cls, raw, "top level")
-        for required in ("network", "output"):
-            if required not in raw:
-                raise ConfigError(f"Missing [{required}] section.")
-
-        def optional_table(kind: type[T], key: str) -> T | None:
-            return _build_section(kind, raw[key], key, base_dir) if key in raw else None
-
-        def table_array(kind: type[T], key: str) -> list[T]:
-            items = raw.get(key, [])
-            if not isinstance(items, list):
-                raise ConfigError(f"[{key}] must be an array of tables: use [[{key}]].")
-            return [
-                _build_section(kind, item, f"{key}[{i}]", base_dir) for i, item in enumerate(items)
-            ]
-
-        traffic = optional_table(TrafficConfig, "traffic")
-        if traffic is not None and traffic.segments is None and traffic.stations is None:
-            raise ConfigError("[traffic] needs 'segments' and/or 'stations'.")
-        output = _build_section(OutputConfig, raw["output"], "output", base_dir)
-        coarsen = optional_table(CoarsenConfig, "coarsen")
-        coarse_outputs = (output.coarse_nodes, output.coarse_edges, output.coarse_graphml)
-        if coarsen is not None and all(p is None for p in coarse_outputs):
-            raise ConfigError(
-                "[coarsen] needs an [output] coarse_nodes/coarse_edges/coarse_graphml."
-            )
-        if coarsen is None and any(p is not None for p in coarse_outputs):
-            raise ConfigError("[output] coarse_* paths need a [coarsen] section.")
-        if output.geosparql_crs not in ("crs84", "native"):
-            raise ConfigError("[output] geosparql_crs must be 'crs84' or 'native'.")
-        return cls(
-            network=_build_section(NetworkConfig, raw["network"], "network", base_dir),
-            output=output,
-            coarsen=coarsen,
-            roadway=optional_table(RoadwayConfig, "roadway"),
-            traffic=traffic,
-            vegetation=table_array(VegetationConfig, "vegetation"),
-            polygons=table_array(PolygonConfig, "polygons"),
-        )
-
-
-_PATH_KEYS = {
-    "path",
-    "segments",
-    "stations",
-    "edges",
-    "graphml",
-    "coarse_nodes",
-    "coarse_edges",
-    "coarse_graphml",
-    "geosparql",
-}
-
-
-def _reject_unknown(kind: type, raw: dict[str, Any], where: str) -> None:
-    if not isinstance(raw, dict):
-        raise ConfigError(f"[{where}] must be a table.")
-    unknown = set(raw) - {f.name for f in fields(kind)}
-    if unknown:
-        raise ConfigError(f"Unknown keys in [{where}]: {sorted(unknown)}")
-
-
-def _build_section[T](kind: type[T], raw: dict[str, Any], where: str, base_dir: Path) -> T:
-    _reject_unknown(kind, raw, where)
-    values = {k: (base_dir / v if k in _PATH_KEYS else v) for k, v in raw.items()}
-    try:
-        return kind(**values)
-    except TypeError as exc:
-        raise ConfigError(f"[{where}]: {exc}") from exc
+        try:
+            return cls.model_validate(raw, context={"base_dir": base_dir})
+        except ValidationError as exc:
+            raise ConfigError(str(exc)) from exc

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal, get_args
 
 import geopandas as gpd
 import numpy as np
@@ -23,7 +24,8 @@ from exactextract.raster import RasterioRasterSource
 
 from feral_mapper_data.geo.geometry import buffer_flat_corridors
 
-SUPPORTED_STATS = ("mean", "std", "min", "max", "median", "count")
+Stat = Literal["mean", "std", "min", "max", "median", "count"]
+SUPPORTED_STATS: tuple[str, ...] = get_args(Stat)
 
 
 def raster_corridor_stats(
